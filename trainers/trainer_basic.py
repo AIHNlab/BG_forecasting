@@ -1,7 +1,7 @@
 import torch
 import os
 
-class Trainer:
+class TrainerBasic:
     def __init__(self, model, train_loader, val_loader, criterion, optimizer, num_epochs=100, patience=3, model_path='best_model.pth'):
         self.model = model
         self.train_loader = train_loader

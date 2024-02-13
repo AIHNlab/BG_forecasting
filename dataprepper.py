@@ -1,11 +1,11 @@
 import torch
 
 class DataPrepper:
-    def __init__(self, participants, handler, specific_participant=None, 
+    def __init__(self, participants, dataframes, specific_participant=None, 
                  forecast_steps=24, scaler = None, sequence_length = 25,
                  feature_list = ['cbg', 'basal', 'carbInput', 'bolus'], target_list = ['cbg']):
         self.participants = participants
-        self.handler = handler
+        self.dataframes = dataframes
         self.specific_participant = specific_participant
         self.forecast_steps = forecast_steps
         self.feature_list = feature_list
@@ -24,7 +24,7 @@ class DataPrepper:
 
         for participant in self.participants:
             if participant == self.specific_participant or self.specific_participant is None:
-                df_participant = self.handler.get_dataframe(participant)
+                df_participant = self.dataframes[participant]
                 features, target = self._select_features_and_target(df_participant)
                 features = self._normalize_features(features)
                 features_seq, target_seq = self._create_sequences(features, target['cbg'].values)
@@ -35,12 +35,12 @@ class DataPrepper:
         self.target_seq = torch.cat(participant_targets, dim=0)
         return self.features_seq, self.target_seq
 
-    def _get_dataframes(self):
-        dfs = []
-        for participant in self.participants:
-            if participant == self.specific_participant or self.specific_participant is None:
-                dfs.append(self.handler.get_dataframe(participant))
-        return dfs
+    #def _get_dataframes(self):
+    #    dfs = []
+    #    for participant in self.participants:
+    #        if participant == self.specific_participant or self.specific_participant is None:
+    #            dfs.append(self.dataframes.get_dataframe(participant))
+    #    return dfs
 
 
     def _select_features_and_target(self, df):
