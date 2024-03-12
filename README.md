@@ -37,3 +37,6 @@ To install all the necessary libraries, run the following command in your termin
 
 ```bash
 pip install -r requirements.txt
+
+## Datamodel
+https://illustrious-star-52d.notion.site/Datamodel-b12271138b9543c0938635e364278099?pvs=4
