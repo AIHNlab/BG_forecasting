@@ -13,7 +13,7 @@ Here's a brief overview of each file:
 
 The trained models are located in the "models" directory on the format:
 
-`<model_type>/<forecast_steps>/<participantID>.pth`
+`<dataset_name>/<model_type>/<forecast_steps>/<participantID>.pth`
 
 The scalers are located in the "scalers" directory.
 
