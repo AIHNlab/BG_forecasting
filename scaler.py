@@ -1,21 +1,44 @@
 import os
 import joblib
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
+import numpy as np
 
 class Scaler:
-    def __init__(self, data_handler, features):
+    def __init__(self, data_handler, features, scaler, missing_mask=None):
         self.data_handler = data_handler
         self.features = features
-        self.scaler = StandardScaler()
+        self.scaler = scaler
+        scaler_filename = scaler.__class__.__name__ + "_" + data_handler.get_dataset_name()
+        file_path = "scalers" + os.sep + scaler_filename
+        self.missing_mask = missing_mask
+        if not os.path.exists(file_path):
+            self.fit_and_save(scaler_filename)
+        else:
+            #self.load_scaler(scaler_filename)
+            self.load_scaler("StandardScaler_Tidepool_SAP100")
+
 
     def get_scaler(self):
         return self.scaler
 
-    def fit_and_save(self, filename):
-        self.scaler.fit(pd.concat(self.data_handler.get_train_dataframes().values())[self.features])
+    def fit_and_save(self, scaler_filename):
+        train_dataframes = self.data_handler.get_train_dataframes()
+        if self.missing_mask is None:
+            self.scaler.fit(pd.concat(train_dataframes.values())[self.features])
+        else:
+            # Fit the scaler on the non-missing values of each DataFrame
+            print(self.missing_mask.keys())
+            for key in train_dataframes.keys():
+                if key not in self.missing_mask:
+                    not_missing_mask = np.ones_like(train_dataframes[key], dtype=bool)
+                else:
+                    not_missing_mask = ~self.missing_mask[key]
+                self.scaler.partial_fit(train_dataframes[key][self.features][not_missing_mask])
         # Save scaler for later use
-        joblib.dump(self.scaler, "scalers" + os.sep + filename)
+        if not os.path.exists("scalers"):
+            os.makedirs("scalers")
+        joblib.dump(self.scaler, "scalers" + os.sep + scaler_filename)
 
-    def load_scaler(filename):
-        return joblib.load("scalers" + os.sep + filename)
+    def load_scaler(self, scaler_filename):
+        self.scaler = joblib.load("scalers" + os.sep + scaler_filename)
+    
