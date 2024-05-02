@@ -6,6 +6,7 @@ import simplejson as json
 from dataloaders.dataloader import Dataloader
 from dataloaders.dataloader_ohio import DataloaderOhio
 from dataloaders.dataloader_tidepool_sap100 import DataloaderTidepoolSAP100
+from dataloaders.dataloader_merged import DataloaderMerged
 
 
 class DataHandler:

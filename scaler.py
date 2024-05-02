@@ -4,18 +4,22 @@ import pandas as pd
 import numpy as np
 
 class Scaler:
-    def __init__(self, data_handler, features, scaler, missing_mask=None):
+    def __init__(self, data_handler, features, scaler, file_path, is_input, missing_mask=None):
         self.data_handler = data_handler
         self.features = features
         self.scaler = scaler
-        scaler_filename = scaler.__class__.__name__ + "_" + data_handler.get_dataset_name()
-        file_path = "scalers" + os.sep + scaler_filename
+        #scaler_filename = scaler.__class__.__name__ + "_" + data_handler.get_dataset_name()
         self.missing_mask = missing_mask
-        if not os.path.exists(file_path):
+        self.file_path = file_path
+        if is_input:
+            scaler_filename = file_path + os.sep + "scaler_input.pkl"
+        else:
+            scaler_filename = file_path + os.sep + "scaler_target.pkl"
+        if not os.path.exists(scaler_filename):
             self.fit_and_save(scaler_filename)
         else:
             #self.load_scaler(scaler_filename)
-            self.load_scaler("StandardScaler_Tidepool_SAP100")
+            self.load_scaler(scaler_filename)
 
 
     def get_scaler(self):
@@ -35,10 +39,10 @@ class Scaler:
                     not_missing_mask = ~self.missing_mask[key]
                 self.scaler.partial_fit(train_dataframes[key][self.features][not_missing_mask])
         # Save scaler for later use
-        if not os.path.exists("scalers"):
-            os.makedirs("scalers")
-        joblib.dump(self.scaler, "scalers" + os.sep + scaler_filename)
+        if not os.path.exists(self.file_path):
+            os.makedirs(self.file_path)
+        joblib.dump(self.scaler, scaler_filename)
 
     def load_scaler(self, scaler_filename):
-        self.scaler = joblib.load("scalers" + os.sep + scaler_filename)
+        self.scaler = joblib.load(scaler_filename)
     
