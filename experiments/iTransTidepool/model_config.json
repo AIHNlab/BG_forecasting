@@ -1,0 +1,65 @@
+{
+    "hp_config": {
+        "batch_size": 32,
+        "num_epochs": 100,
+        "learning_rate": 0.01,
+        "input_dim": 4,
+        "hidden_dim": 5,
+        "output_dim": 1,
+        "feature_window": 24
+    },
+    "run_config": {
+        "experiment_path": "experiments/iTransTidepool",
+        "dataset_names": [
+            "Tidepool_SAP100"
+        ],
+        "dataloaders": [
+            "DataloaderTidepoolSAP100"
+        ],
+        "step_input_sequences": [
+            100
+        ],
+        "features": [
+            "cbg",
+            "basal",
+            "carbInput",
+            "bolus"
+        ],
+        "fill_types": [
+            -5,
+            -5,
+            -5,
+            -5
+        ],
+        "participants": "all",
+        "forecast_steps": 6,
+        "parent_model": null,
+        "trainer": "Exp_Long_Term_Forecast",
+        "architecture": "MirshekarianLSTM",
+        "forecast_window": 6,
+        "scaler": "StandardScaler"
+    },
+    "hp_search_config": {
+        "batch_size": [
+            32
+        ],
+        "num_epochs": [
+            100
+        ],
+        "learning_rate": [
+            0.01
+        ],
+        "input_dim": [
+            4
+        ],
+        "hidden_dim": [
+            5
+        ],
+        "output_dim": [
+            1
+        ],
+        "feature_window": [
+            24
+        ]
+    }
+}
