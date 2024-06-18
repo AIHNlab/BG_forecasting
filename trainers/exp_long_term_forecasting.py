@@ -84,7 +84,7 @@ class Args:
         #self.checkpoints = './checkpoints/'
         self.seq_len = hp_config['feature_window']#25#96
         self.label_len = 48 # no longer needed in inverted Transformers
-        self.pred_len = hp_config['forecast_window']#96
+        self.pred_len = hp_config['forecast_steps']#96
         self.enc_in = 7
         self.dec_in = 7
         self.c_out = 7

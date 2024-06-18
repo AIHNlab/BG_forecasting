@@ -4,8 +4,8 @@ import pandas as pd
 import numpy as np
 
 class Scaler:
-    def __init__(self, data_handler, features, scaler, file_path, is_input, missing_mask=None):
-        self.data_handler = data_handler
+    def __init__(self, dataframes, features, scaler, file_path, is_input, missing_mask=None):
+        self.data_handler = dataframes
         self.features = features
         self.scaler = scaler
         #scaler_filename = scaler.__class__.__name__ + "_" + data_handler.get_dataset_name()
@@ -26,7 +26,7 @@ class Scaler:
         return self.scaler
 
     def fit_and_save(self, scaler_filename):
-        train_dataframes = self.data_handler.get_train_dataframes()
+        train_dataframes = self.dataframes
         if self.missing_mask is None:
             self.scaler.fit(pd.concat(train_dataframes.values())[self.features])
         else:

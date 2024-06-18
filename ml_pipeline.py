@@ -33,7 +33,7 @@ import shutil
 #    evaluator = Evaluator(model, test_loader)
 #    return evaluator.evaluate()
 
-def plot_results(participants, plot_data):
+def plot_results(participants, plot_data, config):
     fig, axs = plt.subplots(len(participants), 1, figsize=(10, 5 * len(participants)))
     for i, (ax, data) in enumerate(zip(axs, plot_data)):
         predictions, actuals = data
@@ -66,18 +66,18 @@ def train_model(hp_config, features_train, target_train, fitted_scaler_y):
     trainer = globals()[config["run_config"]["trainer"]](hp_config, config['run_config']['experiment_path']+os.sep+'best_model.pth',retrain_model=retrain_model)
     trainer.train(train_loader, val_loader)
 
-def evaluate_model(hp_config, datahandler, scaler_class_x, scaler_class_y, participants='all'):
+def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participants):
     plot_data = []
     rmses = []
     rmse_df = pd.DataFrame(columns=['Participant', 'RMSE'])  # DataFrame to store all RMSEs
 
     for participant in participants:
         participants_test = [participant]
-        prepper = DataPrepper(participants_test, datahandler, feature_list=config['run_config']['features'], data_type="test", forecast_steps=config['run_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'])
+        prepper = DataPrepper(participants_test, dataframes, feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'])
         features_test, target_test = prepper.make_features_and_targetpair()
         test_data = TensorDataset(features_test, target_test)
-        test_loader = DataLoader(test_data, shuffle=False, batch_size=hp_config['batch_size'])
-        trainer = globals()[config["run_config"]["trainer"]](hp_config, config['run_config']['experiment_path']+os.sep+'best_model.pth')
+        test_loader = DataLoader(test_data, shuffle=False, batch_size=config['hp_config']['batch_size'])
+        trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], config['run_config']['experiment_path']+os.sep+'best_model.pth')
         predictions, actuals = trainer.test(test_loader, scaler=prepper.scaler_y.scaler)
 
         predictions = np.array(predictions)[:, -1, :].flatten()
@@ -92,7 +92,7 @@ def evaluate_model(hp_config, datahandler, scaler_class_x, scaler_class_y, parti
         print(rmse_df_inter)
 
         # Save DataFrame to a CSV file
-        evaluation_path = os.path.join(config['run_config']['experiment_path'], 'evaluation', participant)
+        evaluation_path = os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant))
         os.makedirs(evaluation_path, exist_ok=True)
         rmse_df_inter.to_csv(os.path.join(evaluation_path, 'rmse.csv'), index=False)
 
@@ -106,10 +106,35 @@ def evaluate_model(hp_config, datahandler, scaler_class_x, scaler_class_y, parti
         # Append the RMSE to the summary DataFrame
         rmse_df = pd.concat([rmse_df, rmse_df_inter], ignore_index=True)
 
-    plot_results(participants, plot_data)
+    plot_results(participants, plot_data, config)
 
     # Save the summary of all RMSEs to a CSV file
     rmse_df.to_csv(os.path.join(config['run_config']['experiment_path'], 'evaluation', 'rmse_summary.csv'), index=False)
+
+def evaluate_model_glucobench(config, dataframes, scaler_class_x, scaler_class_y, participants):
+    mse_errors = []
+    mae_errors = []
+
+    for participant in participants:
+        participants_test = [participant]
+        prepper = DataPrepper(participants_test, dataframes, feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'])
+        features_test, target_test = prepper.make_features_and_targetpair()
+        test_data = TensorDataset(features_test, target_test)
+        test_loader = DataLoader(test_data, shuffle=False, batch_size=config['hp_config']['batch_size'])
+        trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], config['run_config']['experiment_path']+os.sep+'best_model.pth')
+        predictions, actuals = trainer.test(test_loader, scaler=prepper.scaler_y.scaler)
+        mse_errors.append(np.mean((actuals - predictions)**2, axis=(1,2)))
+        mae_errors.append(np.mean(np.abs(actuals - predictions), axis=(1,2)))
+        #print("yo")
+        #predictions = np.array(predictions)[:, -1, :].flatten()
+        #actuals = np.array(actuals)[:, -1, :].flatten()
+        #predictions = np.median(np.array(predictions), axis=1).flatten()
+        #actuals = np.median(np.array(actuals), axis=1).flatten()
+
+    print("Median MAE: ", np.median(np.concatenate(mae_errors)))
+    print("Median MSE: ", np.median(np.concatenate(mse_errors)))
+    #return np.concatenate(mae_errors), np.concatenate(mse_errors)
+    return np.vstack((np.concatenate(mse_errors), np.concatenate(mae_errors))).T
     
 def main(config, train=True, test=True):
     parent_model_path = config['run_config']['parent_model_path']
@@ -146,7 +171,7 @@ def main(config, train=True, test=True):
             participants_train = list(data_handler.get_train_dataframes().keys())
         else:
             participants_train = config['run_config']['participants']
-        prepper = DataPrepper(participants_train, data_handler, feature_list=config['run_config']['features'], data_type="train", forecast_steps=config['run_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'])
+        prepper = DataPrepper(participants_train, data_handler.get_train_dataframes(), feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'],step=config['run_config']['step_training'])
         features_train, target_train = prepper.make_features_and_targetpair()
         #prepper = DataPrepper(participants_test, data_handler, feature_list=config['run_config']['features'], data_type="test", forecast_steps=config['run_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'])
         #features_test, target_test = prepper.make_features_and_targetpair()
@@ -158,7 +183,7 @@ def main(config, train=True, test=True):
         else:
             participants_test = config['run_config']['participants']
 
-        evaluate_model(config['hp_config'], data_handler, scaler_class_x, scaler_class_y, participants=participants_test)
+        evaluate_model(config, data_handler.get_test_dataframes(), scaler_class_x, scaler_class_y, participants=participants_test)
 
 if __name__ == "__main__":
     # Assumes that the dataset is already processed to standardized format
@@ -167,10 +192,23 @@ if __name__ == "__main__":
     #experiment_path = os.path.join('experiments','iTransTrainedOnTidepoolOnOhio')
 
     # Trained and tested on Ohio
-    experiment_path = os.path.join('experiments','iTransTest')
+    #experiment_path = os.path.join('experiments','iTransTest')
 
     #Pretrained on Tidepool, retrained on ohio, tested on ohio:
     #experiment_path = os.path.join('experiments','iTransTidepoolRetrainedOnOhio')
+
+    #Pretrained on Tidepool:
+    #experiment_path = os.path.join('experiments','iTransTidepool60')
+
+    #Pretrained on Tidepool, retrained on ohio, tested on ohio:
+    #experiment_path = os.path.join('experiments','iTransTidepool60TestOhio')
+
+    #Pretrained on Tidepool only CGM data:
+    experiment_path = os.path.join('experiments','iTransTidepool60OnlyCGM')
+
+    #Pretrained on Tidepool only CGM data:
+    #experiment_path = os.path.join('experiments','testing')
+
     model_config_path = experiment_path+os.sep+'model_config.json'
     config = json.load(open(model_config_path))
     main(config)

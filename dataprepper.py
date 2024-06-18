@@ -4,18 +4,14 @@ from scaler import Scaler
 from tqdm import tqdm
 
 class DataPrepper:
-    def __init__(self, participants, data_handler, data_type, specific_participant=None, 
+    def __init__(self, participants, dataframes, specific_participant=None, 
                  forecast_steps=24, scaler_class_x = None, scaler_class_y = None, sequence_length = 25,
                  feature_list = ['cbg', 'basal', 'carbInput', 'bolus'], target_list = ['cbg'],
                  step = 1, allowed_missing_values_rate = [0.5,1.0,1.0,1.0], allowed_missing_values_rate_target = [0.0], fill_types=None, experiment_path=None):
-        data_handler.load_data()
+
         self.participants = participants
-        if data_type == "train":
-            self.dataframes = data_handler.get_train_dataframes()
-        elif data_type == "test":
-            self.dataframes = data_handler.get_test_dataframes()
-        else:
-            self.dataframes = data_handler.get_all_dataframes()
+
+        self.dataframes = dataframes
         self.specific_participant = specific_participant
         self.forecast_steps = forecast_steps
         self.feature_list = feature_list
@@ -39,8 +35,8 @@ class DataPrepper:
             self.fill_types = fill_types
         self.missing_mask = self.handle_missing_values(self.feature_list)
         # Initialize Scaler
-        self.scaler_x = Scaler(data_handler=data_handler, features=self.feature_list, scaler=scaler_class_x, missing_mask=self.missing_mask, is_input=True, file_path=experiment_path)
-        self.scaler_y = Scaler(data_handler=data_handler, features=self.target_list, scaler=scaler_class_y, missing_mask=self.missing_mask, is_input=False, file_path=experiment_path)
+        self.scaler_x = Scaler(dataframes=dataframes, features=self.feature_list, scaler=scaler_class_x, missing_mask=self.missing_mask, is_input=True, file_path=experiment_path)
+        self.scaler_y = Scaler(dataframes=dataframes, features=self.target_list, scaler=scaler_class_y, missing_mask=self.missing_mask, is_input=False, file_path=experiment_path)
     #@profile
     def make_features_and_targetpair(self):
         participant_sequences = []

@@ -4,7 +4,7 @@ import pandas as pd
 def check_if_model_is_compatible_with_trainer(model, trainer):
     #This needs to be filled out everytime a new model or trainer is added to the system.
     supported_models_for_trainer_dict = {
-        "Trainer": ["MirshekarianLSTM"] 
+        "TrainerBasic": ["MirshekarianLSTM"] 
     }
     if (type(trainer).__name__ == "Trainer" and type(model).__name__ in supported_models_for_trainer_dict["Trainer"]):
         print("Model is compatible with trainer.")
