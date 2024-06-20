@@ -5,7 +5,7 @@ import numpy as np
 
 class Scaler:
     def __init__(self, dataframes, features, scaler, file_path, is_input, missing_mask=None):
-        self.data_handler = dataframes
+        self.dataframes = dataframes
         self.features = features
         self.scaler = scaler
         #scaler_filename = scaler.__class__.__name__ + "_" + data_handler.get_dataset_name()

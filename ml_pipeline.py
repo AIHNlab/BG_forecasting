@@ -92,7 +92,7 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
         print(rmse_df_inter)
 
         # Save DataFrame to a CSV file
-        evaluation_path = os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant))
+        evaluation_path = os.path.join(os.path.dirname(__file__),config['run_config']['experiment_path'], 'evaluation', str(participant))
         os.makedirs(evaluation_path, exist_ok=True)
         rmse_df_inter.to_csv(os.path.join(evaluation_path, 'rmse.csv'), index=False)
 
@@ -109,43 +109,72 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
     plot_results(participants, plot_data, config)
 
     # Save the summary of all RMSEs to a CSV file
-    rmse_df.to_csv(os.path.join(config['run_config']['experiment_path'], 'evaluation', 'rmse_summary.csv'), index=False)
+    rmse_df.to_csv(os.path.join(os.path.dirname(__file__),config['run_config']['experiment_path'], 'evaluation', 'rmse_summary.csv'), index=False)
 
-def evaluate_model_glucobench(config, dataframes, scaler_class_x, scaler_class_y, participants):
+def evaluate_model_glucobench(config, dataframes):
     mse_errors = []
     mae_errors = []
+    if config["run_config"]['scaler'] == "StandardScaler":
+        scaler_class_x = StandardScaler()
+        scaler_class_y = StandardScaler()
 
-    for participant in participants:
+    for participant in dataframes.keys():
         participants_test = [participant]
         prepper = DataPrepper(participants_test, dataframes, feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'])
         features_test, target_test = prepper.make_features_and_targetpair()
         test_data = TensorDataset(features_test, target_test)
         test_loader = DataLoader(test_data, shuffle=False, batch_size=config['hp_config']['batch_size'])
-        trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], config['run_config']['experiment_path']+os.sep+'best_model.pth')
+        trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth')
         predictions, actuals = trainer.test(test_loader, scaler=prepper.scaler_y.scaler)
         mse_errors.append(np.mean((actuals - predictions)**2, axis=(1,2)))
         mae_errors.append(np.mean(np.abs(actuals - predictions), axis=(1,2)))
-        #print("yo")
-        #predictions = np.array(predictions)[:, -1, :].flatten()
-        #actuals = np.array(actuals)[:, -1, :].flatten()
-        #predictions = np.median(np.array(predictions), axis=1).flatten()
-        #actuals = np.median(np.array(actuals), axis=1).flatten()
 
     print("Median MAE: ", np.median(np.concatenate(mae_errors)))
     print("Median MSE: ", np.median(np.concatenate(mse_errors)))
     #return np.concatenate(mae_errors), np.concatenate(mse_errors)
     return np.vstack((np.concatenate(mse_errors), np.concatenate(mae_errors))).T
-    
-def main(config, train=True, test=True):
-    parent_model_path = config['run_config']['parent_model_path']
-    experiment_path = config['run_config']['experiment_path']
+
+def train_model_glucobench(config, dataframes_train, dataframes_val):
+    init_experiment_directory(config)
+    if config["run_config"]['scaler'] == "StandardScaler":
+        scaler_class_x = StandardScaler()
+        scaler_class_y = StandardScaler()
+    train_prepper = DataPrepper(dataframes_train.keys(), dataframes_train, feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'],step=config['run_config']['step_training'])
+    features_train, target_train = train_prepper.make_features_and_targetpair()
+    test_prepper = DataPrepper(dataframes_val.keys(), dataframes_val, feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'],step=config['run_config']['step_training'])
+    features_val, target_val = test_prepper.make_features_and_targetpair()
+    # Split the training data into training and validation sets
+    features_train, features_val, target_train, target_val = train_test_split(
+        features_train, target_train, test_size=0.2, random_state=42)
+    # Create TensorDatasets for the training and validation sets
+    train_data = TensorDataset(features_train, target_train)
+    val_data = TensorDataset(features_val, target_val)
+    # Create DataLoaders
+    train_loader = DataLoader(train_data, shuffle=True, batch_size=config['hp_config']['batch_size'])
+    val_loader = DataLoader(val_data, shuffle=False, batch_size=config['hp_config']['batch_size'])
+
+    # Train the model
+    retrain_model = True
+    if config['run_config']['parent_model_path'] is not None:
+        retrain_model = False
+    trainer = globals()[config["run_config"]["trainer"]](config['hp_config'],os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth',retrain_model=retrain_model)
+    trainer.train(train_loader, val_loader)
+
+def init_experiment_directory(config):
+    parent_model_path = os.path.dirname(__file__) + os.sep + config['run_config']['parent_model_path']
+    experiment_path = os.path.dirname(__file__) + os.sep + config['run_config']['experiment_path']
+
+    os.makedirs(experiment_path, exist_ok=True)
     if parent_model_path is not None:
         shutil.copy2(os.path.join(parent_model_path, 'scaler_input.pkl'), os.path.join(experiment_path, 'scaler_input.pkl'))
         shutil.copy2(os.path.join(parent_model_path, 'scaler_target.pkl'), os.path.join(experiment_path, 'scaler_output.pkl'))
         shutil.copy2(os.path.join(parent_model_path, 'best_model.pth'), os.path.join(experiment_path, 'best_model.pth'))
     #dump config
-    with open(config['run_config']['experiment_path']+os.sep+'model_config.json', 'w') as f:
+    with open(experiment_path+os.sep+'model_config.json', 'w') as f:
         f.write(json.dumps(config, indent=4))
+
+def main(config, train=True, test=True):
+    init_experiment_directory(config)
     if len(config['run_config']['dataloaders']) == 1:
         data_handler = DataHandler(config['run_config']['dataloaders'][0], "", dataset_name=config['run_config']['dataset_names'][0])
         data_handler.load_data()
