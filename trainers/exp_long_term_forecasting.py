@@ -85,7 +85,7 @@ class Args:
         self.target = 'OT'
         self.freq = 'h'
         #self.checkpoints = './checkpoints/'
-        if hp_config['hsitory_of_days'] > 0:
+        if hp_config['history_of_days'] > 0:
             self.seq_len = hp_config['feature_window'] + hp_config['forecast_steps']#25#96
         else:
             self.seq_len = hp_config['feature_window'] 
