@@ -9,6 +9,8 @@ import time
 import warnings
 import numpy as np
 import matplotlib.pyplot as plt
+from torch.utils.tensorboard import SummaryWriter
+from sklearn import metrics
 
 warnings.filterwarnings('ignore')
 
@@ -54,7 +56,7 @@ class EarlyStopping:
         if self.best_score is None:
             self.best_score = score
             self.save_checkpoint(val_loss, model, path)
-        elif score < self.best_score + self.delta:
+        elif score <= self.best_score + self.delta:
             self.counter += 1
             print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
             if self.counter >= self.patience:
@@ -75,22 +77,27 @@ class Args:
         #self.is_training = 0
         #self.model_id = 'test5'
         self.model = hp_config['architecture']
+        self.freeze_encoder = hp_config['freeze_encoder']
         self.data = 'custom'
         #self.root_path = './data/electricity/'
         #self.data_path = 'electricity.csv'
-        self.features = 'M'
+        self.features = 'MS'
         self.target = 'OT'
         self.freq = 'h'
         #self.checkpoints = './checkpoints/'
-        self.seq_len = hp_config['feature_window']#25#96
+        if hp_config['hsitory_of_days'] > 0:
+            self.seq_len = hp_config['feature_window'] + hp_config['forecast_steps']#25#96
+        else:
+            self.seq_len = hp_config['feature_window'] 
         self.label_len = 48 # no longer needed in inverted Transformers
         self.pred_len = hp_config['forecast_steps']#96
         self.enc_in = 7
         self.dec_in = 7
         self.c_out = 7
-        self.d_model = 512 # Interesting to add to hp_config
+        self.d_model = hp_config['token_size']#256#512 # Interesting to add to hp_config
         self.n_heads = 8 # Interesting to add to hp_config
-        self.e_layers = 2 # Interesting to add to hp_config
+        self.e_layers = hp_config['encoder_layers'] # Interesting to add to hp_config
+        self.forecast_horizons = hp_config['forecast_horizons']
         self.d_layers = 1 # Interesting to add to hp_config
         self.d_ff = 2048 # Interesting to add to hp_config
         self.moving_avg = 25 # Don't think this is used for iTransformer
@@ -122,7 +129,7 @@ class Args:
         #self.target_root_path = './data/electricity/'
         #self.target_data_path = 'electricity.csv'
         self.efficient_training = False
-        self.use_norm = True
+        self.use_norm = False#True
         self.partial_start_index = 0
 
         if self.use_gpu and self.use_multi_gpu:
@@ -140,6 +147,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         #self.test_loader = test_loader
         self.model_path = model_path
         self.retrain_model = retrain_model
+        self.criterion = nn.MSELoss()
+        self.criterion_forecast = nn.MSELoss()
+        self.criterion_imputation = nn.MSELoss()
+        self.criterion_alarm = nn.CrossEntropyLoss()
+        self.criterion_uncertainty = nn.GaussianNLLLoss()
         super(Exp_Long_Term_Forecast, self).__init__(args)
 
     def _build_model(self):
@@ -196,7 +208,50 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         criterion = nn.MSELoss()
         return criterion
 
-    def vali(self, vali_data, vali_loader, criterion):
+    def calculate_loss(self, outputs, batch_x, batch_y):
+        if isinstance(outputs, tuple):
+            f_dim = -1 if self.args.features == 'MS' else 0
+            batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+            for outputs_item in outputs: outputs_item = outputs_item[:, -self.args.pred_len:, f_dim:]
+            forecast_outputs, imputation_outputs, alarm_outputs, uncertainty_forecast_outputs, uncertainty_imputation_outputs = outputs
+            loss_forecasting = self.criterion_forecast(forecast_outputs, batch_y)
+            loss_imputation = self.criterion_imputation(imputation_outputs, batch_x)
+            states = torch.zeros_like(batch_y) # Hypoglycemia
+            states[batch_y > 70] = 1 # Normal
+            states[batch_y > 180] = 2 # Hyperglycemia
+            loss_alarm = self.criterion_alarm(alarm_outputs, states)
+            loss_uncertainty_forecast = self.criterion_uncertainty(forecast_outputs, batch_y, uncertainty_forecast_outputs)
+            loss_uncertainty_imputation = self.criterion_uncertainty(imputation_outputs, batch_x, uncertainty_imputation_outputs)
+            loss = loss_forecasting + loss_imputation + loss_alarm + loss_uncertainty_forecast + loss_uncertainty_imputation
+        else:
+            f_dim = -1 if self.args.features == 'MS' else 0
+            outputs = outputs[:, -self.args.pred_len:, f_dim:]
+            batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+            loss = self.criterion(outputs, batch_y)
+        return loss
+
+    def calculate_regression_metrics(self, pred, targets):
+        regression_metrics = {}
+        for forecast_horizon in self.args.forecast_horizons:
+            pred_step = pred[:, forecast_horizon, :].flatten()
+            targets_step = targets[:, forecast_horizon, :].flatten()
+            mae = metrics.mean_absolute_error(targets_step, pred_step)
+            mse = metrics.mean_squared_error(targets_step, pred_step)
+            rmse = np.sqrt(mse)
+            mape = metrics.mean_absolute_percentage_error(targets_step, pred_step)
+            #mspe = metrics.mean_squared_log_error(targets_step, pred_step)
+            regression_metrics["forecast_horizon_"+str(forecast_horizon)] = {'mae': mae, 'mse': mse, 'rmse': rmse, 'mape': mape}
+            
+        print(regression_metrics)
+        
+    def calculate_classification_metrics(pred, targets):
+        classification_metrics = {}
+        pass
+    def calculate_uncertainty_metrics(pred, uncertainty, targets):
+        pass
+
+
+    def vali(self, vali_data, vali_loader):
         total_loss = []
         self.model.eval()
         with torch.no_grad():
@@ -228,22 +283,17 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
                     else:
                         outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-                f_dim = -1 if self.args.features == 'MS' else 0
-                outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-
-                pred = outputs.detach().cpu()
-                true = batch_y.detach().cpu()
-
-                loss = criterion(pred, true)
-
-                total_loss.append(loss)
+                loss = self.calculate_loss(outputs, batch_x, batch_y)
+                total_loss.append(loss.item())
         total_loss = np.average(total_loss)
         self.model.train()
         return total_loss
 
     def train(self, train_loader, vali_loader):
         #train_data, train_loader = self._get_data(flag='train')
+        tb_dir = os.path.dirname(self.model_path)
+        log_dir = os.path.join(tb_dir, 'logs', time.strftime("%Y%m%d-%H%M%S"))
+        writer = SummaryWriter(log_dir)
         #vali_data, vali_loader = self._get_data(flag='val')
         vali_data = None
         #test_data, test_loader = self._get_data(flag='test')
@@ -254,17 +304,24 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
 
-        if self.retrain_model == False:
-            self.model.load_state_dict(torch.load(self.model_path))
-            print('Model loaded from:', self.model_path)
-
         time_now = time.time()
 
         train_steps = len(train_loader)
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
         model_optim = self._select_optimizer()
-        criterion = self._select_criterion()
+
+        if self.retrain_model == False:
+            self.model.load_state_dict(torch.load(self.model_path))
+            if self.args.freeze_encoder:
+                self.model.freeze_encoder()
+            print('Model loaded from:', self.model_path)
+            # Validate baseline performance of the model
+            vali_loss = self.vali(vali_data, vali_loader)
+            early_stopping(vali_loss, self.model, path)
+            if early_stopping.early_stop:
+                print("Early stopping")
+                return self.model
 
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
@@ -284,6 +341,9 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 batch_x = batch_x.float().to(self.device)
 
                 batch_y = batch_y.float().to(self.device)
+                #states = torch.zeros_like(batch_y) # Hypoglycemia
+                #states[batch_y > 70] = 1 # Normal
+                #states[batch_y > 180] = 2 # Hyperglycemia
                 if 'PEMS' in self.args.data or 'Solar' in self.args.data or 'custom' in self.args.data:
                     batch_x_mark = None
                     batch_y_mark = None
@@ -295,38 +355,31 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
 
-                # encoder - decoder
-                if self.args.use_amp:
-                    with torch.cuda.amp.autocast():
-                        if self.args.output_attention:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                        else:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-
-                        f_dim = -1 if self.args.features == 'MS' else 0
-                        outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                        batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                        loss = criterion(outputs, batch_y)
-                        train_loss.append(loss.item())
+                if self.args.output_attention:
+                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
                 else:
-                    if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                    else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
-                    f_dim = -1 if self.args.features == 'MS' else 0
-                    outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                    loss = criterion(outputs, batch_y)
-                    train_loss.append(loss.item())
+                loss = self.calculate_loss(outputs, batch_x, batch_y)
+                train_loss.append(loss.item())
 
                 if (i + 1) % 100 == 0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
                     speed = (time.time() - time_now) / iter_count
                     left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
                     print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
+                    
                     iter_count = 0
                     time_now = time.time()
+                    writer.add_scalar('Loss/train_iters', loss.item(), epoch * train_steps + i)
+                
+                if (i + 1) % 5000 == 0:
+                    vali_loss = self.vali(vali_data, vali_loader)
+                    print("\titers: {0}, epoch: {1} | val_loss: {2:.7f}".format(i + 1, epoch + 1, vali_loss))
+                    time_now = time.time()
+
+                    #vali_loss = self.vali(vali_data, vali_loader, criterion)
+                    writer.add_scalar('Loss/val_iters', vali_loss, epoch * train_steps + i)
 
                 if self.args.use_amp:
                     scaler.scale(loss).backward()
@@ -338,7 +391,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
-            vali_loss = self.vali(vali_data, vali_loader, criterion)
+            #writer.add_scalar('Loss/train', loss.item(), epoch * len(train_loader) + i)
+            writer.add_scalar('Loss/train', train_loss, epoch)
+            vali_loss = self.vali(vali_data, vali_loader)
+            writer.add_scalar('Loss/val', vali_loss, epoch)
             #test_loss = self.vali(test_data, test_loader, criterion)
 
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
@@ -354,7 +410,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         best_model_path = self.model_path #path + '/' + 'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
-
+        writer.close()
         return self.model
 
     def test(self, test_loader, test=1, scaler=None):
@@ -369,6 +425,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         trues = []
 
         self.model.eval()
+        all_forecast = []
+        all_imputation = []
+        all_alarm = []
+        all_uncertainty_forecast = []
+        all_uncertainty_imputation = []
+        all_batch_y = []
+        all_batch_x = []
         with torch.no_grad():
             #for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
             batch_x_mark, batch_y_mark = None, None
@@ -401,44 +464,70 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
                 f_dim = -1 if self.args.features == 'MS' else 0
-                outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                outputs = outputs.detach().cpu().numpy()
-                batch_y = batch_y.detach().cpu().numpy()
-                #if test_data.scale and self.args.inverse:
-                #if scaler:
-                #    shape = outputs.shape
-                #    outputs = scaler.inverse_transform(outputs.squeeze(0)).reshape(shape)
-                #    batch_y = scaler.inverse_transform(batch_y.squeeze(0)).reshape(shape)
+                if isinstance(outputs, tuple):
+                    #for outputs_item in outputs: outputs_item = outputs_item[:, -self.args.pred_len:, f_dim:]
+                    # Calcu
+                    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                    batch_x = batch_x[:, -self.args.seq_len:, f_dim:].to(self.device)
+                    #outputs = outputs.detach().cpu().numpy()
+                    batch_y = batch_y.detach().cpu().numpy()
+                    batch_x = batch_x.detach().cpu().numpy()
+                    all_forecast.append(outputs[0][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
+                    all_imputation.append(outputs[1][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
+                    all_alarm.append(outputs[2][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
+                    all_uncertainty_forecast.append(outputs[3][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
+                    all_uncertainty_imputation.append(outputs[4][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
+                    all_batch_y.append(batch_y)
+                    all_batch_x.append(batch_x)
 
-                #pred =  scaler.inverse_transform(outputs)
-                #true =  scaler.inverse_transform(batch_y)
-                pred = scaler.inverse_transform(outputs.reshape(-1, outputs.shape[-1])).reshape(outputs.shape)
-                true = scaler.inverse_transform(batch_y.reshape(-1, batch_y.shape[-1])).reshape(batch_y.shape)
+                    outputs = outputs[0][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy()
+                    pred = scaler.inverse_transform(outputs.reshape(-1, outputs.shape[-1])).reshape(outputs.shape)
+                    true = scaler.inverse_transform(batch_y.reshape(-1, batch_y.shape[-1])).reshape(batch_y.shape)
+                else:
+                    outputs = outputs[:, -self.args.pred_len:, f_dim:]
+                    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                    outputs = outputs.detach().cpu().numpy()
+                    batch_y = batch_y.detach().cpu().numpy()
+                    #Would prefer to remove the scaling here
+                    pred = scaler.inverse_transform(outputs.reshape(-1, outputs.shape[-1])).reshape(outputs.shape)
+                    true = scaler.inverse_transform(batch_y.reshape(-1, batch_y.shape[-1])).reshape(batch_y.shape)
+                    if np.any(true < 0):
+                        print("wtf")
+ 
+                    #pred = outputs
+                    #true = batch_y
 
-                #plt.plot(scaler.inverse_transform(pred[i]), label='Predicted', linestyle='dashed')
-                #plt.plot(scaler.inverse_transform(true[i]), label='True')
-                #plt.ylim(0, 300)
-                #plt.legend()
-                #plt.show()
+                    #plt.plot(scaler.inverse_transform(pred[i]), label='Predicted', linestyle='dashed')
+                    #plt.plot(scaler.inverse_transform(true[i]), label='True')
+                    #plt.ylim(0, 300)
+                    #plt.legend()
+                    #plt.show()
 
                 preds.append(pred)
                 trues.append(true)
-                #if i % 20 == 0:
-                #    input = batch_x.detach().cpu().numpy()
-                #    if test_data.scale and self.args.inverse:
-                #        shape = input.shape
-                #        input = test_data.inverse_transform(input.squeeze(0)).reshape(shape)
-                #    gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
-                #    pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
-                #    visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
-        print("yo")
+
         preds = np.array(preds[:-1])
         trues = np.array(trues[:-1])
-        print('test shape:', preds.shape, trues.shape)
-        preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
-        trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
-        print('test shape:', preds.shape, trues.shape)
+        #print('test shape:', preds.shape, trues.shape)
+        # Check if trues is empty
+        if trues.size == 0:
+            print("Warning: 'trues' is empty. Skipping reshaping.")
+        else:
+            preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
+            trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
+        #print('test shape:', preds.shape, trues.shape)
+        #all_forecast = np.concatenate(np.array(all_forecast[:-1]))
+        #all_imputation = np.concatenate(np.array(all_imputation[:-1]))
+        #all_alarm = np.concatenate(np.array(all_alarm[:-1]))
+        #all_uncertainty_forecast = np.concatenate(np.array(all_uncertainty_forecast[:-1]))
+        #all_uncertainty_imputation = np.concatenate(np.array(all_uncertainty_imputation[:-1]))
+        #all_batch_y = np.concatenate(np.array(all_batch_y[:-1]))
+        #all_batch_x = np.concatenate(np.array(all_batch_x[:-1]))
+        #self.calculate_regression_metrics(all_forecast, all_batch_y)
+        #self.calculate_regression_metrics(all_imputation, all_batch_x)
+        #self.calculate_classification_metrics(all_alarm, all_batch_y)
+        #self.calculate_uncertainty_metrics(all_forecast, all_uncertainty_forecast, all_batch_y)
+        #self.calculate_uncertainty_metrics(all_imputation, all_uncertainty_imputation, all_batch_x)
 
 
         #mae, mse, rmse, mape, mspe = metric(preds, trues)

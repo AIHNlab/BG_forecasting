@@ -48,3 +48,23 @@ def load_dataframes(folder):
         dataframes[key] = df
 
     return dataframes
+
+from sklearn.base import BaseEstimator, TransformerMixin
+
+class IdentityTransformer(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        # Returns self, nothing to compute here
+        return self
+
+    def partial_fit(self, X, y=None):
+        # Since there's nothing to fit, just return self.
+        # This maintains compatibility with incremental learning algorithms.
+        return self
+
+    def transform(self, X):
+        # Returns the input data unchanged
+        return X
+
+    def inverse_transform(self, X):
+        # Returns the input data unchanged
+        return X
