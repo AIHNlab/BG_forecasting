@@ -182,7 +182,42 @@ class FullAttention(nn.Module):
         else:
             return (V.contiguous(), None)
 
+class FullAttentionCompletelyRemoveMissing(nn.Module):
+    def __init__(self, mask_flag=True, factor=5, scale=None, attention_dropout=0.1, output_attention=False):
+        super(FullAttentionCompletelyRemoveMissing, self).__init__()
+        self.scale = scale
+        self.mask_flag = mask_flag
+        self.output_attention = output_attention
+        self.dropout = nn.Dropout(attention_dropout)
 
+    def forward(self, queries, keys, values, attn_mask, tau=None, delta=None):
+        B, L, H, E = queries.shape
+        _, S, _, D = values.shape
+        scale = self.scale or 1. / sqrt(E)
+
+        scores = torch.einsum("blhe,bshe->bhls", queries, keys)
+
+        if self.mask_flag:
+            if attn_mask is None:
+                attn_mask = TriangularCausalMask(B, L, device=queries.device)
+
+        # Apply softmax to the scaled scores
+        A = torch.softmax(scale * scores, dim=-1)
+
+        # Apply the attention mask to A and set the masked values to 0
+        if self.mask_flag:
+            A = A.masked_fill(attn_mask.mask, 0.0)
+
+        # Apply dropout to the masked attention weights
+        A = self.dropout(A)
+
+        # Compute the weighted sum of the values
+        V = torch.einsum("bhls,bshd->blhd", A, values)
+
+        if self.output_attention:
+            return (V.contiguous(), A)
+        else:
+            return (V.contiguous(), None)
 # Code implementation from https://github.com/zhouhaoyi/Informer2020
 class ProbAttention(nn.Module):
     def __init__(self, mask_flag=True, factor=5, scale=None, attention_dropout=0.1, output_attention=False):

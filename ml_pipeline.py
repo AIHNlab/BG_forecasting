@@ -7,9 +7,10 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from dataprepper import DataPrepper
-from architectures.mirshekarian_lstm import MirshekarianLSTM
+from architectures.lstms import MirshekarianLSTM, TidepoolLSTM
 from trainers.trainer_basic import TrainerBasic
 from trainers.exp_long_term_forecasting import Exp_Long_Term_Forecast
+from trainers.trainer_linreg import DartsLinearRegressionModel, SciKitLinearRegressionModel
 from datahandler import DataHandler
 from dataloaders.dataloader_tidepool_sap100 import Dataloader
 from datapreprocessor import DataPreProcessor
@@ -33,18 +34,34 @@ import shutil
 #
 #    evaluator = Evaluator(model, test_loader)
 #    return evaluator.evaluate()
+def plot_per_horizon(horizons, plot_data, participants, config):
+    """
+    This function creates a separate plot for each forecast horizon with predictions and actuals for all participants.
+    Each participant will have its own subplot.
+    """
+    for horizon in horizons:
+        fig, axs = plt.subplots(len(participants), 1, figsize=(30, 6 * len(participants)))  # Create subplots
+        if len(participants) == 1:
+            axs = [axs]  # Ensure axs is iterable when there's only one participant
+        
+        # Plot data for each participant in their own subplot
+        for idx, (ax, participant) in enumerate(zip(axs, participants)):
+            if len(plot_data[horizon]) > idx:
+                pred_horizon, actual_horizon = plot_data[horizon][idx]
+                ax.plot(actual_horizon, label='Actuals', linestyle='-', linewidth=2, color='blue', alpha=0.7)
+                ax.plot(pred_horizon, label='Predictions', linestyle='--', linewidth=1, color='red', alpha=0.7)
+                ax.legend()
+                ax.set_title(f'Participant {participant} - Horizon {horizon}')
+                ax.set_xlabel('Time')
+                ax.set_ylabel('Values')
 
+        plt.tight_layout()
 
-def plot_results(participants, plot_data, config):
-    fig, axs = plt.subplots(len(participants), 1, figsize=(10, 5 * len(participants)))
-    for i, (ax, data) in enumerate(zip(axs, plot_data)):
-        predictions, actuals = data
-        ax.plot(actuals, linestyle='-', linewidth=2, color='blue', alpha=0.7)
-        ax.plot(predictions, linestyle='--', linewidth=1, color='red', alpha=0.7)
-        if i == 0:
-            ax.legend(['Actuals', 'Predictions'], loc='lower center', bbox_to_anchor=(0.5, 1.0))
-        ax.set_ylim([-10, 450])
-    plt.savefig(os.path.dirname(__file__)+os.sep+os.path.join(config['run_config']['experiment_path'], 'evaluation', 'plot_summary.png'))
+        # Save the consolidated plot for the current horizon
+        evaluation_path = os.path.dirname(__file__)+os.path.join(config['run_config']['experiment_path'], 'evaluation')
+        os.makedirs(evaluation_path, exist_ok=True)
+        plt.savefig(os.path.join(evaluation_path, f'all_participants_horizon_{horizon}.png'))
+        plt.close(fig)  # Close the figure to free up memory
 
 def train_model(hp_config, features_train, target_train, fitted_scaler_y):
     
@@ -56,7 +73,7 @@ def train_model(hp_config, features_train, target_train, fitted_scaler_y):
     train_data = TensorDataset(features_train, target_train)
     val_data = TensorDataset(features_val, target_val)
     # Create DataLoaders
-    train_loader = DataLoader(train_data, shuffle=True, batch_size=hp_config['batch_size'])
+    train_loader = DataLoader(train_data, shuffle=False, batch_size=hp_config['batch_size'])
     val_loader = DataLoader(val_data, shuffle=False, batch_size=hp_config['batch_size'])
     
 
@@ -69,50 +86,56 @@ def train_model(hp_config, features_train, target_train, fitted_scaler_y):
     trainer.train(train_loader, val_loader)
 
 def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participants):
-    plot_data = []
-    rmses = []
-    rmse_df = pd.DataFrame(columns=['Participant', 'RMSE'])  # DataFrame to store all RMSEs
-
+    plot_data = {horizon: [] for horizon in config['hp_config']['forecast_horizons']}
+    rmses = {horizon: [] for horizon in config['hp_config']['forecast_horizons']}
+    rmse_df = pd.DataFrame(columns=['Participant'] + [f'RMSE_{horizon}' for horizon in config['hp_config']['forecast_horizons']])
+    forecast_horizons = config['hp_config']['forecast_horizons']
+    #i=0
     for participant in participants:
+        #i+=1
+        #if i==3: break
         participants_test = [participant]
-        prepper = DataPrepper(participants_test, dataframes, feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'], sequence_length=config['hp_config']['feature_window'],history_of_days=config['hp_config']['history_of_days'])
+        prepper = DataPrepper(participants_test, dataframes, feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'], sequence_length=config['hp_config']['feature_window'], history_of_days=config['hp_config']['history_of_days'])
         features_test, target_test = prepper.make_features_and_targetpair()
         test_data = TensorDataset(features_test, target_test)
         test_loader = DataLoader(test_data, shuffle=False, batch_size=config['hp_config']['batch_size'])
         trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth')
         predictions, actuals = trainer.test(test_loader, scaler=prepper.scaler_y.scaler)
+        
         if actuals.size == 0:
             continue
-        predictions = np.array(predictions)[:, -1, :].flatten()
-        actuals = np.array(actuals)[:, -1, :].flatten()
-
-        plot_data.append((predictions, actuals))
-        rmse = np.sqrt(np.mean((predictions - actuals) ** 2))
-        rmses.append(rmse)
-
-        # Save RMSE to a DataFrame
-        rmse_df_inter = pd.DataFrame({'Participant': [participant], 'RMSE': [rmse]})
-        print(rmse_df_inter)
-
-        # Save DataFrame to a CSV file
-        evaluation_path = os.path.dirname(__file__)+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant))
-        os.makedirs(evaluation_path, exist_ok=True)
-        rmse_df_inter.to_csv(os.path.join(evaluation_path, 'rmse.csv'), index=False)
-
-        # Save plot to a file
-        plt.figure()
-        plt.plot(predictions, label='Predictions')
-        plt.plot(actuals, label='Actuals')
-        plt.legend()
-        plt.savefig(os.path.join(evaluation_path, 'plot.png'))
-
-        # Append the RMSE to the summary DataFrame
-        rmse_df = pd.concat([rmse_df, rmse_df_inter], ignore_index=True)
-
-    plot_results(participants, plot_data, config)
-
-    # Save the summary of all RMSEs to a CSV file
+        
+        rmse_values = {'Participant': participant}
+        
+        for horizon in forecast_horizons:
+            pred_horizon = np.array(predictions)[:, horizon-1, :].flatten()
+            actual_horizon = np.array(actuals)[:, horizon-1, :].flatten()
+            
+            plot_data[horizon].append((pred_horizon, actual_horizon))
+            rmse = np.sqrt(np.mean((pred_horizon - actual_horizon) ** 2))
+            rmses[horizon].append(rmse)
+            rmse_values[f'RMSE_{horizon}'] = rmse
+            
+            # Save plot to a file
+            evaluation_path = os.path.dirname(__file__)+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant), f'horizon_{horizon}')
+            os.makedirs(evaluation_path, exist_ok=True)
+            fig = plt.figure(figsize=(25, 5))
+            plt.plot(actual_horizon, label='Actuals', linestyle='-', linewidth=2, color='blue', alpha=0.7)
+            plt.plot(pred_horizon, label='Predictions', linestyle='--', linewidth=1, color='red', alpha=0.7)
+            plt.legend()
+            plt.title(f'Participant {participant} - Horizon {horizon}')
+            plt.savefig(os.path.join(evaluation_path, 'plot.png'))
+            plt.close(fig)
+            #plt.show()
+        
+        # Append the RMSE values to the summary DataFrame
+        rmse_df = pd.concat([rmse_df, pd.DataFrame([rmse_values])], ignore_index=True)
+    
+    #plot_results(participants, plot_data, config)
     rmse_df.to_csv(os.path.dirname(__file__)+os.sep+os.path.join(config['run_config']['experiment_path'], 'evaluation', 'rmse_summary.csv'), index=False)
+    plot_per_horizon(forecast_horizons, plot_data, participants, config)
+    # Save the summary of all RMSEs to a CSV file
+    
 
 def evaluate_model_glucobench(config, dataframes):
     mse_errors = []
@@ -261,8 +284,14 @@ if __name__ == "__main__":
     #experiment_path = os.path.join('experiments','BGiTransformerTidepool')
 
     #SimpleBaselineModel for Tidepool
-    experiment_path = os.path.join('experiments','SimpleBaselineModelTidepool4layersMultiDay')
+    #experiment_path = os.path.join('experiments','LinRegTestTidepool')
     #experiment_path = os.path.join('experiments','SimpleBaselineModelMultivariate')
+    #experiment_path = os.path.join('experiments','LstmTestTidepool')
+    #experiment_path = os.path.join('experiments','MultiDayCGM2H')
+    #experiment_path = os.path.join('experiments','MultiDayLstmCGM2HBigger')
+    #experiment_path = os.path.join('experiments','MultiDayCGM2H')
+    experiment_path = os.path.join('experiments','MultiDayCGM2HComboAttention')
+    #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'
     config = json.load(open(model_config_path))
