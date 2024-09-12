@@ -11,6 +11,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from sklearn import metrics
+from torchsummary import summary
 
 warnings.filterwarnings('ignore')
 
@@ -69,7 +70,16 @@ class EarlyStopping:
     def save_checkpoint(self, val_loss, model, path):
         if self.verbose:
             print(f'Validation loss decreased ({self.val_loss_min:.6f} --> {val_loss:.6f}).  Saving model ...')
+        
+        # Save the model state dictionary
         torch.save(model.state_dict(), path)
+        
+        # Save the model summary
+        summary_path = os.path.join(os.path.dirname(path), 'model_summary.txt')
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            summary_str = summary(model, input_size=(3, 224, 224))  # Adjust input_size as per your model's requirement
+            f.write(str(summary_str))
+        
         self.val_loss_min = val_loss
 
 class Args:
