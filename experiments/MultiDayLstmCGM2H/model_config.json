@@ -1,0 +1,70 @@
+{
+    "hp_config": {
+        "batch_size": 32,
+        "num_epochs": 100,
+        "learning_rate": 1e-05,
+        "forecast_steps": 24,
+        "architecture": "TidepoolLSTM",
+        "n_features": 4,
+        "hidden_dim": 128,
+        "forecast_horizons": [
+            6,
+            12,
+            24
+        ],
+        "feature_window": 48,
+        "history_of_days": 0
+    },
+    "run_config": {
+        "experiment_path": "/experiments/MultiDayLstmCGM2H",
+        "dataset_names": [
+            "Tidepool_SAP100"
+        ],
+        "dataloaders": [
+            "DataloaderTidepoolSAP100"
+        ],
+        "features": [
+            "cbg",
+            "basal",
+            "carbInput",
+            "bolus"
+        ],
+        "fill_types": [
+            "mean",
+            -1,
+            -1,
+            -1
+        ],
+        "step_training": 10,
+        "train": true,
+        "test": true,
+        "train_participants": "all",
+        "test_participants": "all",
+        "parent_model_path": null,
+        "trainer": "TrainerBasic",
+        "scaler": "StandardScaler"
+    },
+    "hp_search_config": {
+        "batch_size": [
+            32
+        ],
+        "num_epochs": [
+            1
+        ],
+        "learning_rate": [
+            0.01
+        ],
+        "input_dim": [
+            4
+        ],
+        "hidden_dim": [
+            5
+        ],
+        "output_dim": [
+            1
+        ],
+        "feature_window": [
+            24
+        ]
+    }
+}

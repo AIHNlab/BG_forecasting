@@ -1,0 +1,68 @@
+{
+    "hp_config": {
+        "batch_size": 32,
+        "num_epochs": 100,
+        "learning_rate": 1e-05,
+        "input_dim": 4,
+        "hidden_dim": 5,
+        "output_dim": 1,
+        "encoder_layers": 6,
+        "forecast_steps": 24,
+        "architecture": "iTransformer",
+        "token_size": 1024,
+        "history_of_days": 30,
+        "forecast_horizons": [
+            6,
+            12,
+            24
+        ],
+        "feature_window": 48,
+        "freeze_encoder": true
+    },
+    "run_config": {
+        "experiment_path": "/experiments/MultiDayCGM2HComboAttention",
+        "dataset_names": [
+            "Tidepool_SAP100"
+        ],
+        "dataloaders": [
+            "DataloaderTidepoolSAP100"
+        ],
+        "features": [
+            "cbg"
+        ],
+        "fill_types": [
+            "mean"
+        ],
+        "step_training": 10,
+        "train": false,
+        "test": true,
+        "train_participants": "all",
+        "test_participants": "all",
+        "parent_model_path": null,
+        "trainer": "Exp_Long_Term_Forecast",
+        "scaler": "StandardScaler"
+    },
+    "hp_search_config": {
+        "batch_size": [
+            32
+        ],
+        "num_epochs": [
+            1
+        ],
+        "learning_rate": [
+            0.01
+        ],
+        "input_dim": [
+            4
+        ],
+        "hidden_dim": [
+            5
+        ],
+        "output_dim": [
+            1
+        ],
+        "feature_window": [
+            24
+        ]
+    }
+}
