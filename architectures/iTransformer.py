@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .layers.Transformer_EncDec import Encoder, EncoderLayer
-from .layers.SelfAttention_Family import FullAttention, AttentionLayer
+from .layers.SelfAttention_Family import FullAttention, AttentionLayer, FullAttentionCompletelyRemoveMissing
 from .layers.Embed import DataEmbedding_inverted
 import numpy as np
 import matplotlib.pyplot as plt
@@ -21,28 +21,29 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         return x + self.pe[:x.size(0), :]
 
-class TriangularCausalMask2():
-    def __init__(self, B, L, device="cpu"):
-        mask_shape = [B, 1, L, L]
-        with torch.no_grad():
-            self._mask = torch.triu(torch.ones(mask_shape, dtype=torch.bool), diagonal=1).to(device)
+class NegativeNineMask:
+    def __init__(self, x_enc, num_heads, device="cpu",completly_remove_missing=True):
+        """
+        Creates a boolean attention mask that masks out tokens where the first value is -9,
+        expanded to match the dimensions expected by the attention scores.
+        
+        Args:
+            x_enc (torch.Tensor): Input tensor of shape (B, L, N), where B is the batch size,
+                                  L is the sequence length, and N is the number of tokens (features).
+            num_heads (int): Number of attention heads.
+            device (str): Device on which to create the mask (e.g., "cpu" or "cuda").
+        """
+        # Check if the first value in each token is -9
+        batch_size, seq_len, num_tokens = x_enc.shape
+        mask = (x_enc[:, :, 0] == -9).unsqueeze(1).to(device)  # Shape: (B, 1, N)
+        if completly_remove_missing:
+            mask = mask | mask.transpose(1, 2)  # Logical OR to combine masks, Shape: (B, L, L)
+        # Expand the mask to match the expected dimensions [B, H, L, L]
+        self._mask = mask.unsqueeze(1).expand(batch_size, num_heads, seq_len, seq_len)  # Shape: (B, H, L, L)
 
     @property
     def mask(self):
         return self._mask
-
-    def update_mask(self, x_enc):
-        """
-        Update the mask to remove tokens that start with -9 in x_enc.
-        
-        Args:
-            x_enc (torch.Tensor): The input tensor of shape [B, L, D].
-        """
-        B, L, D = x_enc.shape
-        for b in range(B):
-            for l in range(L):
-                if x_enc[b, l, 0] == -9:  # Assuming the first variate is the one to check
-                    self._mask[b, 0, l, :] = 0  # Remove the token in the attention mask
 
 class Model(nn.Module):
     """
@@ -55,6 +56,10 @@ class Model(nn.Module):
         self.pred_len = configs.pred_len
         self.output_attention = configs.output_attention
         self.use_norm = configs.use_norm
+        self.mask_ratio = 0.5#configs.mask_ratio  # Add mask ratio for masking percentage
+        
+        # Learnable mask token
+        self.mask_token = nn.Parameter(torch.randn(1, 1, configs.d_model))
         # Embedding
         self.enc_embedding = DataEmbedding_inverted(configs.seq_len, configs.d_model, configs.embed, configs.freq,
                                                     configs.dropout)
@@ -66,7 +71,7 @@ class Model(nn.Module):
             [
                 EncoderLayer(
                     AttentionLayer(
-                        FullAttention(False, configs.factor, attention_dropout=configs.dropout,
+                        FullAttention(True, configs.factor, attention_dropout=configs.dropout,
                                       output_attention=True), configs.d_model, configs.n_heads),
                     configs.d_model,
                     configs.d_ff,
@@ -78,10 +83,27 @@ class Model(nn.Module):
         )
         self.projector = nn.Linear(configs.d_model, configs.pred_len, bias=True)
 
+    def apply_mask_tokens(self, input, embedded_tokens):
+        """
+        This method applies masking to sequences in embedded_tokens based on the presence of -9 in the input x_enc.
+        It replaces the entire sequence with the learnable mask token if the first token in x_enc is -9.
+        """
+        batch_size, seq_length, embedding_dim = embedded_tokens.shape
+        
+        # Check if the first token of each sequence in x_enc is -9
+        mask_condition = (input[:, 0] == -9)
+        
+        # Copy the input sequence to avoid modification
+        masked_embedded_tokens = embedded_tokens.clone()
+        
+        # Apply the mask to sequences that meet the condition
+        masked_embedded_tokens[mask_condition] = self.mask_token
+
+        return masked_embedded_tokens
+
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
-        #attn_mask = TriangularCausalMask2(x_enc.shape[0], x_enc.shape[1], device=x_enc.device)
-        #attn_mask.update_mask(x_enc)
-        attn_mask = None
+        device = x_enc.device
+        attn_mask = NegativeNineMask(x_enc.transpose(1, 2), num_heads=8, device=x_enc.device, completly_remove_missing=False)
         if self.use_norm:
             # Normalization from Non-stationary Transformer
             means = x_enc.mean(1, keepdim=True).detach()
@@ -97,7 +119,61 @@ class Model(nn.Module):
         # Embedding
         # B L N -> B N E                (B L N -> B L E in the vanilla Transformer)
         enc_out = self.enc_embedding(x_enc, x_mark_enc) # covariates (e.g timestamp) can be also embedded as tokens
-        enc_out = self.positional_encoding(enc_out)
+
+        # Apply masking to the embedded sequence
+        enc_out = self.apply_mask_tokens(x_enc, enc_out)  # Replace some patches with mask tokens
+        if False:#random.randint(1, 100) == 1:
+            x_enc_np = x_enc.detach().cpu().numpy()
+            enc_out_np = enc_out.detach().cpu().numpy()
+            
+            # Select one random sample from the batch
+            #random_index = np.random.randint(x_enc_np.shape[0])
+            #sample_input_tokens = x_enc_np[random_index]
+            sample_embedded_sequence = enc_out_np[0]
+            
+            # Plot the input tokens
+            plt.figure(figsize=(12, 8))
+            
+            input_data = x_enc.detach().cpu().numpy()
+            plt.subplot(2, 1, 1)
+            plt.imshow(input_data[0, :, :], cmap='viridis', aspect='auto')  # Visualizing the first batch
+            plt.colorbar()
+            plt.title('Input Data')
+            plt.xlabel('Time Step')
+            plt.ylabel('Feature Dimension')
+            
+            # Plot the embedded sequence
+            plt.subplot(2, 1, 2)
+            plt.imshow(sample_embedded_sequence.T, aspect='auto', cmap='viridis')
+            plt.colorbar()
+            plt.title(f'Embedded Sequence Sample')
+            plt.ylabel('Embedding Dimension')
+            plt.xlabel('Sequence Position')
+            
+            plt.tight_layout()
+            plt.show()
+        # Assuming enc_out has shape (batch_size, seq_length, embedding_dim)
+        batch_size, seq_length, embedding_dim = enc_out.shape
+        if False:
+            # Calculate the length of each part
+            part_length = seq_length // 4
+
+            # Split the input tensor into four equal parts
+            enc_out_part1 = enc_out[:, :part_length, :]
+            enc_out_part2 = enc_out[:, part_length:2*part_length, :]
+            enc_out_part3 = enc_out[:, 2*part_length:3*part_length, :]
+            enc_out_part4 = enc_out[:, 3*part_length:, :]
+
+            # Apply positional encoding to each part
+            enc_out_part1 = self.positional_encoding(enc_out_part1)
+            enc_out_part2 = self.positional_encoding(enc_out_part2)
+            enc_out_part3 = self.positional_encoding(enc_out_part3)
+            enc_out_part4 = self.positional_encoding(enc_out_part4)
+
+            # Concatenate the encoded parts back together
+            enc_out = torch.cat((enc_out_part1, enc_out_part2, enc_out_part3, enc_out_part4), dim=1)
+        else:
+            enc_out = self.positional_encoding(enc_out)
         # B N E -> B N E                (B L E -> B L E in the vanilla Transformer)
         # the dimensions of embedded time series has been inverted, and then processed by native attn, layernorm and ffn modules
         enc_out, attns = self.encoder(enc_out, attn_mask=attn_mask)
@@ -110,28 +186,48 @@ class Model(nn.Module):
             dec_out = dec_out * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
             dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
 
-        #if random.randint(1, 100) == 1:
-        #    # Plotting the attention matrix and the input
-        #    attention_matrix = attns[0].detach().cpu().numpy()  # Assuming attns is a list of attention matrices
-        #    input_data = x_enc.detach().cpu().numpy()
-        #    plt.figure(figsize=(20, 8))
-        #    # Plot attention matrix
-        #    plt.subplot(2, 1, 1)
-        #    #avg_attention_weights = np.mean(attention_matrix[0, 0, :, :15], axis=0).reshape(1, -1)
-        #    #plt.imshow(avg_attention_weights, cmap='viridis', aspect='auto')
-        #    plt.imshow(attention_matrix[0, 0, :, :], cmap='viridis', aspect='auto')  # Visualizing the first head of the first batch
-        #    plt.colorbar()
-        #    plt.title('Attention Matrix')
-        #    plt.xlabel('Key Position')
-        #    plt.ylabel('Query Position')
-        #    # Plot input data
-        #    plt.subplot(2, 1, 2)
-        #    plt.imshow(input_data[0,:,:], cmap='viridis', aspect='auto')  # Visualizing the first batch
-        #    plt.colorbar()
-        #    plt.title('Input Data')
-        #    plt.xlabel('Feature Dimension')
-        #    plt.ylabel('Time Step')
-        #    plt.show()
+        if False:#random.randint(1, 100) == 1:
+            # Plotting the attention matrix and the input
+            attention_matrix = attns[0].detach().cpu().numpy()  # Assuming attns is a list of attention matrices
+            input_data = x_enc.detach().cpu().numpy()
+            
+            # Average the attention weights over all heads
+            avg_attention_weights = np.mean(attention_matrix[:, :, :, :], axis=1)  # Averaging over the heads dimension
+            
+            # Ensure the dimensions align for matrix multiplication
+            # Transpose input_data to match the dimensions
+            input_data_transposed = np.transpose(input_data[0, :, :], (1, 0))
+            
+            # Matrix multiply the input data with the attention matrix
+            attention_applied = np.matmul(avg_attention_weights[0, :, :], input_data_transposed)
+            
+            plt.figure(figsize=(20, 12))
+            
+            # Plot attention matrix
+            plt.subplot(2, 1, 1)
+            plt.imshow(avg_attention_weights[0, :, :], cmap='plasma', aspect='auto')  # Visualizing the averaged attention weights of the first batch
+            plt.colorbar()
+            plt.title('Attention Matrix (Averaged over Heads)')
+            plt.xlabel('Key Position')
+            plt.ylabel('Query Position')
+            
+            # Plot input data
+            plt.subplot(2, 1, 2)
+            plt.imshow(input_data[0, :, :], cmap='viridis', aspect='auto')  # Visualizing the first batch
+            plt.colorbar()
+            plt.title('Input Data')
+            plt.xlabel('Time Step')
+            plt.ylabel('Feature Dimension')
+            
+            # Plot attention applied to input data
+            #plt.subplot(3, 1, 3)
+            #plt.imshow(attention_applied.T, cmap='inferno', aspect='auto')  # Visualizing the attention applied to the input data with swapped axes
+            #plt.colorbar()
+            #plt.title('Attention Applied to Input Data')
+            #plt.xlabel('Query Position')
+            #plt.ylabel('Feature Dimension')
+            
+            plt.show()
 
         return dec_out[:,:,:1]
 
