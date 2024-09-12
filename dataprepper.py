@@ -66,7 +66,7 @@ class DataPrepper:
                 for feature in self.feature_list:
                     for day in range(1, self.history_of_days + 1):
                         new_column_name = f"{feature}_prevday{day}"
-                        features[new_column_name] = features[feature].shift(day * indices_per_day, fill_value=0)
+                        features[new_column_name] = features[feature].shift(day * indices_per_day, fill_value=-9)
 
                         # Check for missing values
                         #start_idx = day * indices_per_day
