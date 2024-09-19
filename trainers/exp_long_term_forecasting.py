@@ -91,16 +91,17 @@ class Args:
         self.data = 'custom'
         #self.root_path = './data/electricity/'
         #self.data_path = 'electricity.csv'
-        self.features = 'MS'
+        self.features = 'M'
         self.target = 'OT'
         self.freq = 'h'
         #self.checkpoints = './checkpoints/'
-        if hp_config['history_of_days'] > 0:
-            self.seq_len = hp_config['feature_window'] + hp_config['forecast_steps']#25#96
-        else:
-            self.seq_len = hp_config['feature_window'] 
+        #if hp_config['history_of_days'] > 0:
+        #    self.seq_len = hp_config['feature_window'] + hp_config['forecast_steps']#25#96
+        #else:
+        #    self.seq_len = hp_config['feature_window']
+        self.seq_len = hp_config['feature_window'] 
         self.label_len = 48 # no longer needed in inverted Transformers
-        self.pred_len = hp_config['forecast_steps']#96
+        self.pred_len = hp_config['feature_window']#hp_config['forecast_steps']#96
         self.enc_in = 7
         self.dec_in = 7
         self.c_out = 7
@@ -158,6 +159,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         self.model_path = model_path
         self.retrain_model = retrain_model
         self.criterion = nn.MSELoss()
+        self.criterion_non_reduced = nn.MSELoss(reduction='none')
         self.criterion_forecast = nn.MSELoss()
         self.criterion_imputation = nn.MSELoss()
         self.criterion_alarm = nn.CrossEntropyLoss()
@@ -219,26 +221,29 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return criterion
 
     def calculate_loss(self, outputs, batch_x, batch_y):
-        if isinstance(outputs, tuple):
-            f_dim = -1 if self.args.features == 'MS' else 0
-            batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-            for outputs_item in outputs: outputs_item = outputs_item[:, -self.args.pred_len:, f_dim:]
-            forecast_outputs, imputation_outputs, alarm_outputs, uncertainty_forecast_outputs, uncertainty_imputation_outputs = outputs
-            loss_forecasting = self.criterion_forecast(forecast_outputs, batch_y)
-            loss_imputation = self.criterion_imputation(imputation_outputs, batch_x)
-            states = torch.zeros_like(batch_y) # Hypoglycemia
-            states[batch_y > 70] = 1 # Normal
-            states[batch_y > 180] = 2 # Hyperglycemia
-            loss_alarm = self.criterion_alarm(alarm_outputs, states)
-            loss_uncertainty_forecast = self.criterion_uncertainty(forecast_outputs, batch_y, uncertainty_forecast_outputs)
-            loss_uncertainty_imputation = self.criterion_uncertainty(imputation_outputs, batch_x, uncertainty_imputation_outputs)
-            loss = loss_forecasting + loss_imputation + loss_alarm + loss_uncertainty_forecast + loss_uncertainty_imputation
-        else:
-            f_dim = -1 if self.args.features == 'MS' else 0
-            outputs = outputs[:, -self.args.pred_len:, f_dim:]
-            batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-            loss = self.criterion(outputs, batch_y)
-        return loss
+        #if isinstance(outputs, tuple):
+        #    f_dim = -1 if self.args.features == 'MS' else 0
+        #    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+        #    for outputs_item in outputs: outputs_item = outputs_item[:, -self.args.pred_len:, f_dim:]
+        #    forecast_outputs, imputation_outputs, alarm_outputs, uncertainty_forecast_outputs, uncertainty_imputation_outputs = outputs
+        #    loss_forecasting = self.criterion_forecast(forecast_outputs, batch_y)
+        #    loss_imputation = self.criterion_imputation(imputation_outputs, batch_x)
+        #    states = torch.zeros_like(batch_y) # Hypoglycemia
+        #    states[batch_y > 70] = 1 # Normal
+        #    states[batch_y > 180] = 2 # Hyperglycemia
+        #    loss_alarm = self.criterion_alarm(alarm_outputs, states)
+        #    loss_uncertainty_forecast = self.criterion_uncertainty(forecast_outputs, batch_y, uncertainty_forecast_outputs)
+        #    loss_uncertainty_imputation = self.criterion_uncertainty(imputation_outputs, batch_x, uncertainty_imputation_outputs)
+        #    loss = loss_forecasting + loss_imputation + loss_alarm + loss_uncertainty_forecast + loss_uncertainty_imputation
+        #else:
+        f_dim = -1 if self.args.features == 'MS' else 0
+        outputs = outputs[:, -self.args.pred_len:, f_dim:]
+        batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+        mask = batch_y != -8
+        loss = self.criterion_non_reduced(outputs, batch_y)
+        masked_loss = loss * mask.float()
+        masked_loss = masked_loss.sum() / mask.sum()
+        return masked_loss
 
     def calculate_regression_metrics(self, pred, targets):
         regression_metrics = {}
@@ -474,35 +479,35 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
 
                 f_dim = -1 if self.args.features == 'MS' else 0
-                if isinstance(outputs, tuple):
-                    #for outputs_item in outputs: outputs_item = outputs_item[:, -self.args.pred_len:, f_dim:]
-                    # Calcu
-                    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                    batch_x = batch_x[:, -self.args.seq_len:, f_dim:].to(self.device)
-                    #outputs = outputs.detach().cpu().numpy()
-                    batch_y = batch_y.detach().cpu().numpy()
-                    batch_x = batch_x.detach().cpu().numpy()
-                    all_forecast.append(outputs[0][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
-                    all_imputation.append(outputs[1][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
-                    all_alarm.append(outputs[2][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
-                    all_uncertainty_forecast.append(outputs[3][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
-                    all_uncertainty_imputation.append(outputs[4][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
-                    all_batch_y.append(batch_y)
-                    all_batch_x.append(batch_x)
-
-                    outputs = outputs[0][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy()
-                    pred = scaler.inverse_transform(outputs.reshape(-1, outputs.shape[-1])).reshape(outputs.shape)
-                    true = scaler.inverse_transform(batch_y.reshape(-1, batch_y.shape[-1])).reshape(batch_y.shape)
-                else:
-                    outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                    outputs = outputs.detach().cpu().numpy()
-                    batch_y = batch_y.detach().cpu().numpy()
-                    #Would prefer to remove the scaling here
-                    pred = scaler.inverse_transform(outputs.reshape(-1, outputs.shape[-1])).reshape(outputs.shape)
-                    true = scaler.inverse_transform(batch_y.reshape(-1, batch_y.shape[-1])).reshape(batch_y.shape)
-                    if np.any(true < 0):
-                        print("wtf")
+                #if isinstance(outputs, tuple):
+                #    #for outputs_item in outputs: outputs_item = outputs_item[:, -self.args.pred_len:, f_dim:]
+                #    # Calcu
+                #    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                #    batch_x = batch_x[:, -self.args.seq_len:, f_dim:].to(self.device)
+                #    #outputs = outputs.detach().cpu().numpy()
+                #    batch_y = batch_y.detach().cpu().numpy()
+                #    batch_x = batch_x.detach().cpu().numpy()
+                #    all_forecast.append(outputs[0][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
+                #    all_imputation.append(outputs[1][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
+                #    all_alarm.append(outputs[2][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
+                #    all_uncertainty_forecast.append(outputs[3][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
+                #    all_uncertainty_imputation.append(outputs[4][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
+                #    all_batch_y.append(batch_y)
+                #    all_batch_x.append(batch_x)
+                #    outputs = outputs[0][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy()
+                #    pred = scaler.inverse_transform(outputs.reshape(-1, outputs.shape[-1])).reshape(outputs.shape)
+                #    true = scaler.inverse_transform(batch_y.reshape(-1, batch_y.shape[-1])).reshape(batch_y.shape)
+                
+                outputs = outputs[:, -self.args.pred_len:, f_dim:]
+                batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                outputs = outputs.detach().cpu().numpy()
+                batch_y = batch_y.detach().cpu().numpy()
+                batch_y = np.where(np.isin(batch_y, [-8, -9]), np.nan, batch_y)
+                #Would prefer to remove the scaling here
+                pred = scaler.inverse_transform(outputs.reshape(-1, outputs.shape[-1])).reshape(outputs.shape)
+                true = scaler.inverse_transform(batch_y.reshape(-1, batch_y.shape[-1])).reshape(batch_y.shape)
+                #if np.any(true < 0):
+                #    print("wtf")
  
                     #pred = outputs
                     #true = batch_y

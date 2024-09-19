@@ -39,8 +39,7 @@ class DataPrepper:
         #self.missing_mask = self.handle_missing_values(self.feature_list)
         # Initialize Scaler
         self.scaler_x = Scaler(dataframes=dataframes, features=self.feature_list, scaler=scaler_class_x, missing_mask=None, is_input=True, file_path=experiment_path)
-        self.scaler_y = Scaler(dataframes=dataframes, features=self.target_list, scaler=scaler_class_y, missing_mask=None, is_input=False, file_path=experiment_path)
-    #@profile    
+        self.scaler_y = Scaler(dataframes=dataframes, features=self.target_list, scaler=scaler_class_y, missing_mask=None, is_input=False, file_path=experiment_path)   
     def make_features_and_targetpair(self):
         participant_sequences = []
         participant_targets = []
@@ -55,11 +54,13 @@ class DataPrepper:
                 features_missing_mask = features[self.feature_list].isna()
                 targets_missing_mask = targets[self.target_list].isna()
 
-                self.handle_missing_values(features, self.feature_list)
-                self.handle_missing_values(targets, self.target_list)
 
                 features = self._normalize(features, self.scaler_x)
                 targets = self._normalize(targets, self.scaler_y)
+
+                self.handle_missing_values(features, self.feature_list, self.fill_types)
+                self.handle_missing_values(targets, self.target_list, np.full(len(self.target_list), -8))
+                
 
                 # Create new columns for each feature for the previous history_of_days days
                 for feature in self.feature_list:
@@ -67,15 +68,21 @@ class DataPrepper:
                         new_column_name = f"{feature}_prevday{day}"
                         features[new_column_name] = features[feature].shift(day * self.indices_per_day, fill_value=-9)
 
+                for feature in self.target_list:
+                    for day in range(1, self.history_of_days + 1):
+                        new_column_name = f"{feature}_prevday{day}"
+                        targets[new_column_name] = targets[feature].shift(day * self.indices_per_day, fill_value=-9)
+
+                features_seq, target_seq = self._create_sequences(features, features_missing_mask,targets, targets_missing_mask)
                         # Check for missing values
                         #start_idx = day * indices_per_day
                         #if features[feature].iloc[:start_idx].isna().all():
                         #    features[new_column_name] = -1
                         #elif features[feature].iloc[:start_idx].isna().any():
                         #    features[new_column_name] = np.nan
-
-                sequences, targets = self._create_sequences(features, features_missing_mask,targets, targets_missing_mask)
-                features_seq, target_seq = torch.tensor(sequences, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
+                
+                #sequences, targets = self._create_sequences_old(features, features_missing_mask,targets, targets_missing_mask)
+                #features_seq, target_seq = torch.tensor(sequences, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
                 participant_sequences.append(features_seq)
                 participant_targets.append(target_seq)
 
@@ -90,7 +97,7 @@ class DataPrepper:
     #            dfs.append(self.dataframes.get_dataframe(participant))
     #    return dfs
 
-    def handle_missing_values(self, df, features):
+    def handle_missing_values(self, df, features, fill_types):
         # Initialize the missing_mask dictionary to record original missing values
         #missing_mask = {key: df[features].isna() for key, df in self.dataframes.items()}
         #missing_mask = {}
@@ -106,7 +113,7 @@ class DataPrepper:
             #pd.concat([df, df_mask], axis=1).to_csv("yo4.csv")
             #df_mask.shape
             #continue
-        for feature, fill_type in zip(features, self.fill_types):
+        for feature, fill_type in zip(features, fill_types):
             if isinstance(fill_type, str):
                 if fill_type == 'mean':
                     df[feature].fillna(df[feature].mean(), inplace=True)
@@ -140,9 +147,50 @@ class DataPrepper:
             # Convert the NumPy array back to a DataFrame
             normalized_data = pd.DataFrame(transformed_data, index=data.index, columns=data.columns)
             return normalized_data
-        
+
     #@profile
-    def _create_sequences(self, input_data, input_data_missing_mask, target_column, target_column_missing_mask):
+    def _create_sequences(self, input_data, input_data_missing_mask, target_data, target_data_missing_mask):
+        sequences = []
+        targets = []
+        #features_current_day = [input_data.columns.get_loc(col) for col in target_column.columns]
+        input_data_missing_mask = input_data_missing_mask.to_numpy()
+        target_data_missing_mask = target_data_missing_mask.to_numpy()
+        input_data = input_data.to_numpy()
+        target_data = target_data.to_numpy()
+        
+        for i in range(0, len(input_data) - self.sequence_length - self.forecast_steps, self.step):
+            
+            if self.history_of_days > 0:
+                sequence = input_data[i:i + self.sequence_length].copy()
+                #sequence[self.sequence_length:self.sequence_length + self.forecast_steps, features_current_day] = 0
+                target = target_data[i:i + self.sequence_length].copy()
+            else:
+                sequence = input_data[i:i + self.sequence_length]
+                target = target_data[i + self.sequence_length : i + self.sequence_length + self.forecast_steps]
+            sequence_missing_mask = input_data_missing_mask[i:i + self.sequence_length]
+
+            # Calculate the rate of missing values in the sequence
+            missing_values_rate = sequence_missing_mask.mean(axis=0)
+            
+            # If the rate of missing values for any feature is higher than allowed, skip this sequence
+            if any(missing_values_rate > self.allowed_missing_values_rate):
+                continue
+
+            #target = target_column[i + self.sequence_length : i + self.sequence_length + self.forecast_steps]
+            target_missing = target_data_missing_mask[i + self.sequence_length : i + self.sequence_length + self.forecast_steps]
+
+
+            missing_values_rate = target_missing.mean(axis=0)
+            # If any target is missing, skip this sequence
+            if any(missing_values_rate > self.allowed_missing_values_rate_target):
+                continue
+            sequences.append(sequence)
+            targets.append(target)
+        #sequences = np.array(sequences)
+        #targets = np.array(targets)
+        return torch.tensor(sequences, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
+
+    def _create_sequences_old(self, input_data, input_data_missing_mask, target_column, target_column_missing_mask):
         sequences = []
         targets = []
         features_current_day = [input_data.columns.get_loc(col) for col in target_column.columns]
@@ -185,5 +233,5 @@ class DataPrepper:
             sequences.append(sequence)
             targets.append(target)
         return sequences, targets
-        # return torch.tensor(sequences, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
+        # return torch.tensor(sequences, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32
 
