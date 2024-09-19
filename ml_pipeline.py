@@ -119,13 +119,10 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
         rmse_values = {'Participant': participant}
         
         for horizon in forecast_horizons:
-            pred_horizon = np.array(predictions)[:, horizon-1, :].flatten()
-            actual_horizon = np.array(actuals)[:, horizon-1, :].flatten()
+            pred_horizon = np.array(predictions)[:, horizon-1, 0].flatten()
+            actual_horizon = np.array(actuals)[:, horizon-1, 0].flatten()
             
             plot_data[horizon].append((pred_horizon, actual_horizon))
-            rmse = np.sqrt(np.mean((pred_horizon - actual_horizon) ** 2))
-            rmses[horizon].append(rmse)
-            rmse_values[f'RMSE_{horizon}'] = rmse
             
             # Save plot to a file
             evaluation_path = os.path.dirname(__file__)+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant), f'horizon_{horizon}')
@@ -138,6 +135,14 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
             plt.savefig(os.path.join(evaluation_path, 'plot.png'))
             plt.close(fig)
             #plt.show()
+
+            # Filter the arrays using the mask
+            mask = ~np.isnan(actual_horizon)
+            filtered_pred_horizon = pred_horizon[mask]
+            filtered_actual_horizon = actual_horizon[mask]            
+            rmse = np.sqrt(np.mean((pred_horizon - actual_horizon) ** 2))
+            rmses[horizon].append(rmse)
+            rmse_values[f'RMSE_{horizon}'] = rmse
         
         # Append the RMSE values to the summary DataFrame
         rmse_df = pd.concat([rmse_df, pd.DataFrame([rmse_values])], ignore_index=True)
@@ -351,7 +356,7 @@ if __name__ == "__main__":
     #experiment_path = os.path.join('experiments','MultiDayCGM2H')
     #experiment_path = os.path.join('experiments','MultiDayLstmCGM2HBigger')
     #experiment_path = os.path.join('experiments','MultiDayCGM2H')
-    experiment_path = os.path.join('experiments','MultiDayCGM2HComboAttention')
+    experiment_path = os.path.join('experiments','RepresentationLearning')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'
