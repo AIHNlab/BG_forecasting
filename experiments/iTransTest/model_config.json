@@ -6,9 +6,9 @@
         "input_dim": 4,
         "hidden_dim": 5,
         "output_dim": 1,
-        "feature_window": 25,
+        "forecast_steps": 6,
         "architecture": "iTransformer",
-        "forecast_window": 6
+        "feature_window": 25
     },
     "run_config": {
         "experiment_path": "experiments/iTransTest",
@@ -40,10 +40,8 @@
         "test": true,
         "train_participants": "all",
         "test_participants": "all",
-        "forecast_steps": 6,
         "parent_model_path": null,
         "trainer": "Exp_Long_Term_Forecast",
-        "forecast_window": 6,
         "scaler": "StandardScaler"
     },
     "hp_search_config": {

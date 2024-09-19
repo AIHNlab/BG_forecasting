@@ -73,7 +73,7 @@ def train_model(hp_config, features_train, target_train, fitted_scaler_y):
     train_data = TensorDataset(features_train, target_train)
     val_data = TensorDataset(features_val, target_val)
     # Create DataLoaders
-    train_loader = DataLoader(train_data, shuffle=False, batch_size=hp_config['batch_size'])
+    train_loader = DataLoader(train_data, shuffle=True, batch_size=hp_config['batch_size'])
     val_loader = DataLoader(val_data, shuffle=False, batch_size=hp_config['batch_size'])
     
 
@@ -95,7 +95,18 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
         #i+=1
         #if i==3: break
         participants_test = [participant]
-        prepper = DataPrepper(participants_test, dataframes, feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'], sequence_length=config['hp_config']['feature_window'], history_of_days=config['hp_config']['history_of_days'])
+        prepper = DataPrepper(participants_test, 
+                              dataframes, 
+                              feature_list=config['run_config']['features'], 
+                              target_list=config['run_config']['targets'], 
+                              forecast_steps=config['hp_config']['forecast_steps'], 
+                              scaler_class_x=scaler_class_x, 
+                              scaler_class_y=scaler_class_y, 
+                              indices_per_day=config['run_config']['indices_per_day'],
+                              fill_types=config['run_config']['fill_types'], 
+                              experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'], 
+                              sequence_length=config['hp_config']['feature_window'], 
+                              history_of_days=config['hp_config']['history_of_days'])
         features_test, target_test = prepper.make_features_and_targetpair()
         test_data = TensorDataset(features_test, target_test)
         test_loader = DataLoader(test_data, shuffle=False, batch_size=config['hp_config']['batch_size'])
@@ -148,7 +159,18 @@ def evaluate_model_glucobench(config, dataframes):
 
     for participant in dataframes.keys():
         participants_test = [participant]
-        prepper = DataPrepper(participants_test, dataframes, feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'],sequence_length=config['hp_config']['feature_window'],history_of_days=config['hp_config']['history_of_days'])
+        prepper = DataPrepper(participants_test, 
+                              dataframes, 
+                              feature_list=config['run_config']['features'], 
+                              target_list=config['run_config']['targets'], 
+                              forecast_steps=config['hp_config']['forecast_steps'], 
+                              scaler_class_x=scaler_class_x, 
+                              scaler_class_y=scaler_class_y, 
+                              indices_per_day=config['run_config']['indices_per_day'],
+                              fill_types=config['run_config']['fill_types'], 
+                              experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'],
+                              sequence_length=config['hp_config']['feature_window'],
+                              history_of_days=config['hp_config']['history_of_days'])
         features_test, target_test = prepper.make_features_and_targetpair()
         test_data = TensorDataset(features_test, target_test)
         test_loader = DataLoader(test_data, shuffle=False, batch_size=config['hp_config']['batch_size'])
@@ -179,10 +201,37 @@ def train_model_glucobench(config, dataframes_train, dataframes_val, retrain_mod
     #    scaler_class_y = StandardScaler()
     scaler_class_x = globals()[config["run_config"]["scaler"]]()
     scaler_class_y = globals()[config["run_config"]["scaler"]]()
-    train_prepper = DataPrepper(dataframes_train.keys(), dataframes_train, feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'],step=config['run_config']['step_training'],sequence_length=config['hp_config']['feature_window'],history_of_days=config['hp_config']['history_of_days'])
+    
+    train_prepper = DataPrepper(dataframes_train.keys(), 
+                                dataframes_train, 
+                                feature_list=config['run_config']['features'], 
+                                target_list=config['run_config']['targets'], 
+                                forecast_steps=config['hp_config']['forecast_steps'], 
+                                scaler_class_x=scaler_class_x, 
+                                scaler_class_y=scaler_class_y, 
+                                indices_per_day=config['run_config']['indices_per_day'],
+                                fill_types=config['run_config']['fill_types'], 
+                                experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'],
+                                step=config['run_config']['step_training'],
+                                sequence_length=config['hp_config']['feature_window'],
+                                history_of_days=config['hp_config']['history_of_days'])
     features_train, target_train = train_prepper.make_features_and_targetpair()
-    val_prepper = DataPrepper(dataframes_val.keys(), dataframes_val, feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'],step=config['run_config']['step_training'],sequence_length=config['hp_config']['feature_window'],history_of_days=config['hp_config']['history_of_days'])
+    
+    val_prepper = DataPrepper(dataframes_val.keys(), 
+                              dataframes_val, 
+                              feature_list=config['run_config']['features'], 
+                              target_list=config['run_config']['targets'], 
+                              forecast_steps=config['hp_config']['forecast_steps'], 
+                              scaler_class_x=scaler_class_x, 
+                              scaler_class_y=scaler_class_y, 
+                              indices_per_day=config['run_config']['indices_per_day'],
+                              fill_types=config['run_config']['fill_types'], 
+                              experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'],
+                              step=config['run_config']['step_training'],
+                              sequence_length=config['hp_config']['feature_window'],
+                              history_of_days=config['hp_config']['history_of_days'])
     features_val, target_val = val_prepper.make_features_and_targetpair()
+    
     # Split the training data into training and validation sets
     features_train, features_val, target_train, target_val = train_test_split(
         features_train, target_train, test_size=0.2, random_state=42)
@@ -238,8 +287,20 @@ def main(config, train=True, test=True):
         if config['run_config']['train_participants'] == 'all':
             participants_train = list(data_handler.get_train_dataframes().keys())
         else:
-            participants_train = config['run_config']['participants']
-        prepper = DataPrepper(participants_train, data_handler.get_train_dataframes(), feature_list=config['run_config']['features'], forecast_steps=config['hp_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path= os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'],step=config['run_config']['step_training'],sequence_length=config['hp_config']['feature_window'],history_of_days=config['hp_config']['history_of_days'])
+            participants_train = config['run_config']['train_participants']
+        prepper = DataPrepper(participants_train, 
+                              data_handler.get_train_dataframes(), 
+                              feature_list=config['run_config']['features'], 
+                              target_list=config['run_config']['targets'], 
+                              forecast_steps=config['hp_config']['forecast_steps'], 
+                              scaler_class_x=scaler_class_x, 
+                              scaler_class_y=scaler_class_y, 
+                              indices_per_day=config['run_config']['indices_per_day'],
+                              fill_types=config['run_config']['fill_types'], 
+                              experiment_path= os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'],
+                              step=config['run_config']['step_training'],
+                              sequence_length=config['hp_config']['feature_window'],
+                              history_of_days=config['hp_config']['history_of_days'])
         features_train, target_train = prepper.make_features_and_targetpair()
         #prepper = DataPrepper(participants_test, data_handler, feature_list=config['run_config']['features'], data_type="test", forecast_steps=config['run_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'])
         #features_test, target_test = prepper.make_features_and_targetpair()
@@ -249,7 +310,7 @@ def main(config, train=True, test=True):
         if config['run_config']['test_participants'] == 'all':
             participants_test = list(data_handler.get_test_dataframes().keys())
         else:
-            participants_test = config['run_config']['participants']
+            participants_test = config['run_config']['test_participants']
 
         evaluate_model(config, data_handler.get_test_dataframes(), scaler_class_x, scaler_class_y, participants=participants_test)
 
