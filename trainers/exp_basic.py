@@ -2,7 +2,7 @@ import os
 import torch
 #from model import Transformer, Informer, Reformer, Flowformer, Flashformer, \
 #    iTransformer, iInformer, iReformer, iFlowformer, iFlashformer
-from architectures import  iTransformer, BGiTransformer
+from architectures import  iTransformer, BGiTransformer, iTransformerMasked
 
 class Exp_Basic(object):
     def __init__(self, args):
@@ -15,6 +15,7 @@ class Exp_Basic(object):
             #'Flashformer': Flashformer,
             'iTransformer': iTransformer,
             'BGiTransformer': BGiTransformer,
+            'iTransformerMasked': iTransformerMasked,
             #'iInformer': iInformer,
             #'iReformer': iReformer,
             #'iFlowformer': iFlowformer,
