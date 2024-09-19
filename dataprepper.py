@@ -6,7 +6,7 @@ import pandas as pd
 
 class DataPrepper:
     def __init__(self, participants, dataframes, specific_participant=None, 
-                 forecast_steps=24, scaler_class_x = None, scaler_class_y = None, sequence_length = 25,
+                 forecast_steps=24, scaler_class_x = None, scaler_class_y = None, sequence_length = 25, indices_per_day=288,
                  feature_list = ['cbg', 'basal', 'carbInput', 'bolus'], target_list = ['cbg'],
                  step = 1, allowed_missing_values_rate = [0.5,1.0,1.0,1.0], allowed_missing_values_rate_target = [0.0], fill_types=None, experiment_path=None, history_of_days=0):
 
@@ -23,6 +23,7 @@ class DataPrepper:
         self.features_seq = None
         self.target_seq = None
         self.sequence_length = sequence_length
+        self.indices_per_day = indices_per_day
         self.step = step
         self.allowed_missing_values_rate = np.array(allowed_missing_values_rate)
         self.allowed_missing_values_rate_target = np.array(allowed_missing_values_rate_target)
@@ -59,14 +60,12 @@ class DataPrepper:
 
                 features = self._normalize(features, self.scaler_x)
                 targets = self._normalize(targets, self.scaler_y)
-                
-                indices_per_day = 288
 
                 # Create new columns for each feature for the previous history_of_days days
                 for feature in self.feature_list:
                     for day in range(1, self.history_of_days + 1):
                         new_column_name = f"{feature}_prevday{day}"
-                        features[new_column_name] = features[feature].shift(day * indices_per_day, fill_value=-9)
+                        features[new_column_name] = features[feature].shift(day * self.indices_per_day, fill_value=-9)
 
                         # Check for missing values
                         #start_idx = day * indices_per_day
@@ -75,8 +74,8 @@ class DataPrepper:
                         #elif features[feature].iloc[:start_idx].isna().any():
                         #    features[new_column_name] = np.nan
 
-
-                features_seq, target_seq = self._create_sequences(features, features_missing_mask,targets, targets_missing_mask)
+                sequences, targets = self._create_sequences(features, features_missing_mask,targets, targets_missing_mask)
+                features_seq, target_seq = torch.tensor(sequences, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
                 participant_sequences.append(features_seq)
                 participant_targets.append(target_seq)
 
@@ -185,7 +184,6 @@ class DataPrepper:
             #    print(f"Number of values less than 0: {count_negative_values}")
             sequences.append(sequence)
             targets.append(target)
-        sequences = np.array(sequences)
-        targets = np.array(targets)
-        return torch.FloatTensor(sequences), torch.FloatTensor(targets)
+        return sequences, targets
+        # return torch.tensor(sequences, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
 
