@@ -2,7 +2,7 @@ import os
 import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.model_selection import train_test_split
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import TensorDataset, DataLoader, Dataset
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -23,6 +23,7 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 import json
 import numpy as np
 import shutil
+from custom_dataset import CustomDataset
 
 #def evaluate_model(hp_config,features_test, target_test, model_path):
 #
@@ -63,18 +64,18 @@ def plot_per_horizon(horizons, plot_data, participants, config):
         plt.savefig(os.path.join(evaluation_path, f'all_participants_horizon_{horizon}.png'))
         plt.close(fig)  # Close the figure to free up memory
 
-def train_model(hp_config, features_train, target_train, fitted_scaler_y):
+def train_model(config, features_train, target_train, fitted_scaler_y):
     
 
     # Split the training data into training and validation sets
     features_train, features_val, target_train, target_val = train_test_split(
         features_train, target_train, test_size=0.2, random_state=42)
     # Create TensorDatasets for the training and validation sets
-    train_data = TensorDataset(features_train, target_train)
-    val_data = TensorDataset(features_val, target_val)
+    train_data = CustomDataset(features_train, target_train, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
+    val_data = CustomDataset(features_val, target_val, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
     # Create DataLoaders
-    train_loader = DataLoader(train_data, shuffle=True, batch_size=hp_config['batch_size'])
-    val_loader = DataLoader(val_data, shuffle=False, batch_size=hp_config['batch_size'])
+    train_loader = DataLoader(train_data, shuffle=True, batch_size=config['hp_config']['batch_size'])
+    val_loader = DataLoader(val_data, shuffle=False, batch_size=config['hp_config']['batch_size'])
     
 
 
@@ -82,7 +83,7 @@ def train_model(hp_config, features_train, target_train, fitted_scaler_y):
     retrain_model = True
     if config['run_config']['parent_model_path'] is not None:
         retrain_model = False
-    trainer = globals()[config["run_config"]["trainer"]](hp_config, os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth',retrain_model=retrain_model)
+    trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth',retrain_model=retrain_model)
     trainer.train(train_loader, val_loader)
 
 def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participants):
@@ -99,6 +100,8 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
                               dataframes, 
                               feature_list=config['run_config']['features'], 
                               target_list=config['run_config']['targets'], 
+                              allowed_missing_values_rate=config['run_config']['allowed_missing_values_rate'],
+                              allowed_missing_values_rate_target=config['run_config']['allowed_missing_values_rate_target'],
                               forecast_steps=config['hp_config']['forecast_steps'], 
                               scaler_class_x=scaler_class_x, 
                               scaler_class_y=scaler_class_y, 
@@ -108,19 +111,21 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
                               sequence_length=config['hp_config']['feature_window'], 
                               history_of_days=config['hp_config']['history_of_days'])
         features_test, target_test = prepper.make_features_and_targetpair()
-        test_data = TensorDataset(features_test, target_test)
+        test_data = CustomDataset(features_test, target_test, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
         test_loader = DataLoader(test_data, shuffle=False, batch_size=config['hp_config']['batch_size'])
         trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth')
-        predictions, actuals = trainer.test(test_loader, scaler=prepper.scaler_y.scaler)
+        predictions, actuals = trainer.test(test_loader, scaler=prepper.scaler_x.scaler)
         
         if actuals.size == 0:
             continue
         
         rmse_values = {'Participant': participant}
-        
+        if config['hp_config']['forecast_steps'] > 1:
+            predictions = np.array(predictions)[:, -config['hp_config']['forecast_steps']:, test_data.test_target_index]
+            actuals = np.array(actuals)[:, -config['hp_config']['forecast_steps']:, test_data.test_target_index]
         for horizon in forecast_horizons:
-            pred_horizon = np.array(predictions)[:, horizon-1, 0].flatten()
-            actual_horizon = np.array(actuals)[:, horizon-1, 0].flatten()
+            pred_horizon = np.array(predictions)[:, horizon-1].flatten()
+            actual_horizon = np.array(actuals)[:, horizon-1].flatten()
             
             plot_data[horizon].append((pred_horizon, actual_horizon))
             
@@ -140,7 +145,7 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
             mask = ~np.isnan(actual_horizon)
             filtered_pred_horizon = pred_horizon[mask]
             filtered_actual_horizon = actual_horizon[mask]            
-            rmse = np.sqrt(np.mean((pred_horizon - actual_horizon) ** 2))
+            rmse = np.sqrt(np.mean((filtered_pred_horizon - filtered_actual_horizon) ** 2))
             rmses[horizon].append(rmse)
             rmse_values[f'RMSE_{horizon}'] = rmse
         
@@ -168,6 +173,8 @@ def evaluate_model_glucobench(config, dataframes):
                               dataframes, 
                               feature_list=config['run_config']['features'], 
                               target_list=config['run_config']['targets'], 
+                              allowed_missing_values_rate=config['run_config']['allowed_missing_values_rate'],
+                              allowed_missing_values_rate_target=config['run_config']['allowed_missing_values_rate_target'],
                               forecast_steps=config['hp_config']['forecast_steps'], 
                               scaler_class_x=scaler_class_x, 
                               scaler_class_y=scaler_class_y, 
@@ -177,7 +184,7 @@ def evaluate_model_glucobench(config, dataframes):
                               sequence_length=config['hp_config']['feature_window'],
                               history_of_days=config['hp_config']['history_of_days'])
         features_test, target_test = prepper.make_features_and_targetpair()
-        test_data = TensorDataset(features_test, target_test)
+        test_data = CustomDataset(features_test, target_test, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
         test_loader = DataLoader(test_data, shuffle=False, batch_size=config['hp_config']['batch_size'])
         trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth')
         predictions, actuals = trainer.test(test_loader, scaler=prepper.scaler_y.scaler)
@@ -211,6 +218,8 @@ def train_model_glucobench(config, dataframes_train, dataframes_val, retrain_mod
                                 dataframes_train, 
                                 feature_list=config['run_config']['features'], 
                                 target_list=config['run_config']['targets'], 
+                                allowed_missing_values_rate=config['run_config']['allowed_missing_values_rate'],
+                                allowed_missing_values_rate_target=config['run_config']['allowed_missing_values_rate_target'],
                                 forecast_steps=config['hp_config']['forecast_steps'], 
                                 scaler_class_x=scaler_class_x, 
                                 scaler_class_y=scaler_class_y, 
@@ -226,6 +235,8 @@ def train_model_glucobench(config, dataframes_train, dataframes_val, retrain_mod
                               dataframes_val, 
                               feature_list=config['run_config']['features'], 
                               target_list=config['run_config']['targets'], 
+                              allowed_missing_values_rate=config['run_config']['allowed_missing_values_rate'],
+                              allowed_missing_values_rate_target=config['run_config']['allowed_missing_values_rate_target'],
                               forecast_steps=config['hp_config']['forecast_steps'], 
                               scaler_class_x=scaler_class_x, 
                               scaler_class_y=scaler_class_y, 
@@ -240,9 +251,9 @@ def train_model_glucobench(config, dataframes_train, dataframes_val, retrain_mod
     # Split the training data into training and validation sets
     features_train, features_val, target_train, target_val = train_test_split(
         features_train, target_train, test_size=0.2, random_state=42)
-    # Create TensorDatasets for the training and validation sets
-    train_data = TensorDataset(features_train, target_train)
-    val_data = TensorDataset(features_val, target_val)
+    # Create CustomDatasets for the training and validation sets
+    train_data = CustomDataset(features_train, target_train, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
+    val_data = CustomDataset(features_val, target_val, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
     # Create DataLoaders
     train_loader = DataLoader(train_data, shuffle=True, batch_size=config['hp_config']['batch_size'])
     val_loader = DataLoader(val_data, shuffle=False, batch_size=config['hp_config']['batch_size'])
@@ -297,6 +308,8 @@ def main(config, train=True, test=True):
                               data_handler.get_train_dataframes(), 
                               feature_list=config['run_config']['features'], 
                               target_list=config['run_config']['targets'], 
+                              allowed_missing_values_rate=config['run_config']['allowed_missing_values_rate'],
+                              allowed_missing_values_rate_target=config['run_config']['allowed_missing_values_rate_target'],
                               forecast_steps=config['hp_config']['forecast_steps'], 
                               scaler_class_x=scaler_class_x, 
                               scaler_class_y=scaler_class_y, 
@@ -309,7 +322,7 @@ def main(config, train=True, test=True):
         features_train, target_train = prepper.make_features_and_targetpair()
         #prepper = DataPrepper(participants_test, data_handler, feature_list=config['run_config']['features'], data_type="test", forecast_steps=config['run_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'])
         #features_test, target_test = prepper.make_features_and_targetpair()
-        train_model(config['hp_config'], features_train, target_train, prepper.scaler_y.scaler)
+        train_model(config, features_train, target_train, prepper.scaler_y.scaler)
 
     if config['run_config']['test']:
         if config['run_config']['test_participants'] == 'all':
@@ -356,7 +369,13 @@ if __name__ == "__main__":
     #experiment_path = os.path.join('experiments','MultiDayCGM2H')
     #experiment_path = os.path.join('experiments','MultiDayLstmCGM2HBigger')
     #experiment_path = os.path.join('experiments','MultiDayCGM2H')
-    experiment_path = os.path.join('experiments','RepresentationLearning')
+    #data_handler = DataHandler("DataloaderOhio", r"c:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Ohio Data\Ohio_XML", dataset_name="Ohio2018")
+    #data_handler.load_data(save_as_csv=True)
+    #data_handler = DataHandler("DataloaderOhio", r"c:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Ohio Data\Ohio2020_XML", dataset_name="Ohio2020")
+    #data_handler.load_data(save_as_csv=True)
+    #data_handler = DataHandler("DataloaderTidepoolSAP100", r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data", dataset_name="Tidepool_SAP100")
+    #data_handler.load_data(save_as_csv=True)
+    experiment_path = os.path.join('experiments','Testing2')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'
