@@ -5,6 +5,7 @@ from glob import glob
 from tqdm import tqdm
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from dataloaders.dataloader import Dataloader
+from utils import calculate_total_cob, calculate_total_iob
 
 
 class DataloaderTidepoolSAP100(Dataloader):
@@ -95,7 +96,7 @@ class DataloaderTidepoolSAP100(Dataloader):
         # Return the metadata dictionary
         return metadata
     
-    def _get_dataframe(self, file):
+    def _get_dataframe(self, file, calculate_iob = True):
         dict={}
         patient_id = file.split(os.sep)[-1].split('.')[0]
         print(patient_id)
@@ -290,5 +291,10 @@ class DataloaderTidepoolSAP100(Dataloader):
         #print(df.head(50))
         
         #df.to_csv(path_or_buf='mhm/{}_processed.csv'.format(patient_id), index=False)
+        if calculate_iob == True:
+            df['iob'] = calculate_total_iob(df['bolus'].values, ts_min=5, t_action_max_min=240)
+            df['iob'] = pd.Series(df['iob']).rolling(window=12, min_periods=1).mean().to_numpy()
+            df['cob'] = calculate_total_cob(df['carbInput'].values, carb_absorption=0.8, ts_min=5, t_action_max_min=240)
+            df['cob'] = pd.Series(df['cob']).rolling(window=12, min_periods=1).mean().to_numpy()
         return df, patient_id
 
