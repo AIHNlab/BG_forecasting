@@ -12,8 +12,11 @@ import matplotlib.pyplot as plt
 from torch.utils.tensorboard import SummaryWriter
 from sklearn import metrics
 from torchsummary import summary
-
+import random
 warnings.filterwarnings('ignore')
+import io
+import PIL
+from torchvision.transforms import ToTensor
 
 
 def adjust_learning_rate(optimizer, epoch, args):
@@ -99,6 +102,8 @@ class Args:
         #    self.seq_len = hp_config['feature_window'] + hp_config['forecast_steps']#25#96
         #else:
         #    self.seq_len = hp_config['feature_window']
+        self.history_of_days = hp_config['history_of_days']
+        self.n_features = hp_config['n_features']
         self.seq_len = hp_config['feature_window'] 
         self.label_len = 48 # no longer needed in inverted Transformers
         self.pred_len = hp_config['feature_window']#hp_config['forecast_steps']#96
@@ -108,6 +113,7 @@ class Args:
         self.d_model = hp_config['token_size']#256#512 # Interesting to add to hp_config
         self.n_heads = 8 # Interesting to add to hp_config
         self.e_layers = hp_config['encoder_layers'] # Interesting to add to hp_config
+        self.forecast_steps = hp_config['forecast_steps']
         self.forecast_horizons = hp_config['forecast_horizons']
         self.d_layers = 1 # Interesting to add to hp_config
         self.d_ff = 2048 # Interesting to add to hp_config
@@ -160,6 +166,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         self.retrain_model = retrain_model
         self.criterion = nn.MSELoss()
         self.criterion_non_reduced = nn.MSELoss(reduction='none')
+        #self.criterion_non_reduced = nn.L1Loss(reduction='none')
         self.criterion_forecast = nn.MSELoss()
         self.criterion_imputation = nn.MSELoss()
         self.criterion_alarm = nn.CrossEntropyLoss()
@@ -219,30 +226,162 @@ class Exp_Long_Term_Forecast(Exp_Basic):
     def _select_criterion(self):
         criterion = nn.MSELoss()
         return criterion
+    
+    def calculate_loss(self, outputs, batch_x, batch_y, masked_tokens=None, tb_writer=None, iter_count=None):
+        """
+        Calculates the loss using a combined mask where batch_x and batch_y are different
+        and batch_y is not -8.
+        
+        Args:
+            outputs (torch.Tensor): The model outputs of shape [Batch, Time, Variate].
+            batch_x (torch.Tensor): The input tensor of shape [Batch, Time, Variate].
+            batch_y (torch.Tensor): The target tensor of shape [Batch, Time, Variate].
+            
+        Returns:
+            torch.Tensor: The masked loss.
+        """
+        # Create the difference mask
+        difference_mask = (batch_x != batch_y).float()
+        
+        # Create the valid mask where batch_y is not -8
+        valid_mask = ((batch_y != -8) & (batch_y != -9)).float()
+        
+        # Combine the masks
+        combined_mask = difference_mask * valid_mask
+        
+        # Compute the loss without reduction
+        loss = self.criterion_non_reduced(outputs, batch_y)
+        
+        # Apply the combined mask
+        masked_loss = loss * combined_mask
+        
+        # Normalize the masked loss
+        if combined_mask.sum() == 0:
+            masked_loss = torch.tensor(0.0, device=outputs.device)
+        else:
+            masked_loss = masked_loss.sum() / combined_mask.sum()
+      
+        if iter_count is not None and iter_count % 5000 == 0:  # Plotting condition
+            # Plotting
+            batch_index = 15  # Select the first batch for visualization
+            # Replace -8 and -9 with NaN
+            batch_y = batch_y.clone()
+            batch_y[(batch_y == -8) | (batch_y == -9)] = np.nan
 
-    def calculate_loss(self, outputs, batch_x, batch_y):
-        #if isinstance(outputs, tuple):
-        #    f_dim = -1 if self.args.features == 'MS' else 0
-        #    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-        #    for outputs_item in outputs: outputs_item = outputs_item[:, -self.args.pred_len:, f_dim:]
-        #    forecast_outputs, imputation_outputs, alarm_outputs, uncertainty_forecast_outputs, uncertainty_imputation_outputs = outputs
-        #    loss_forecasting = self.criterion_forecast(forecast_outputs, batch_y)
-        #    loss_imputation = self.criterion_imputation(imputation_outputs, batch_x)
-        #    states = torch.zeros_like(batch_y) # Hypoglycemia
-        #    states[batch_y > 70] = 1 # Normal
-        #    states[batch_y > 180] = 2 # Hyperglycemia
-        #    loss_alarm = self.criterion_alarm(alarm_outputs, states)
-        #    loss_uncertainty_forecast = self.criterion_uncertainty(forecast_outputs, batch_y, uncertainty_forecast_outputs)
-        #    loss_uncertainty_imputation = self.criterion_uncertainty(imputation_outputs, batch_x, uncertainty_imputation_outputs)
-        #    loss = loss_forecasting + loss_imputation + loss_alarm + loss_uncertainty_forecast + loss_uncertainty_imputation
-        #else:
+            batch_x = batch_x.clone()
+            batch_x[(batch_x == -8) | (batch_x == -9)] = np.nan
+
+            outputs = outputs.clone()
+            outputs[(outputs == -8) | (outputs == -9)] = np.nan
+            # Determine the color scale limits using masks to ignore NaN values
+            vmin = min(
+                torch.quantile(batch_x[~torch.isnan(batch_x)], 0.05).item(),
+                torch.quantile(batch_y[~torch.isnan(batch_y)], 0.05).item(),
+                torch.quantile(outputs[~torch.isnan(outputs)], 0.05).item()
+            )
+            vmax = max(
+                torch.quantile(batch_x[~torch.isnan(batch_x)], 0.95).item(),
+                torch.quantile(batch_y[~torch.isnan(batch_y)], 0.95).item(),
+                torch.quantile(outputs[~torch.isnan(outputs)], 0.95).item()
+            )
+            
+
+            plt.figure(figsize=(20, 5))
+            
+            plt.subplot(1, 4, 1)
+            plt.imshow(combined_mask[batch_index, :, :].cpu().detach().numpy(), aspect='auto', cmap='gray')
+            plt.title('Mask')
+            plt.colorbar()
+            
+            plt.subplot(1, 4, 2)
+            plt.imshow(batch_y[batch_index, :, :].cpu().detach().numpy(), aspect='auto', cmap='viridis', vmin=vmin, vmax=vmax)
+            plt.title('Batch Y')
+            plt.colorbar()
+            
+            plt.subplot(1, 4, 3)
+            plt.imshow(batch_x[batch_index, :, :].cpu().detach().numpy(), aspect='auto', cmap='viridis', vmin=vmin, vmax=vmax)
+            plt.title('Batch X')
+            plt.colorbar()
+            
+            plt.subplot(1, 4, 4)
+            plt.imshow(outputs[batch_index, :, :].cpu().detach().numpy(), aspect='auto', cmap='viridis', vmin=vmin, vmax=vmax)
+            plt.title('Outputs')
+            plt.colorbar()
+            
+            plt.tight_layout()
+            #plt.show()
+            # Save the plot to a buffer
+            buf = io.BytesIO()
+            plt.savefig(buf, format='png')
+            buf.seek(0)
+            plt.close()
+            
+            # Convert the buffer to a tensor
+            image = PIL.Image.open(buf)
+            image = ToTensor()(image)
+            
+            # Add the image to TensorBoard
+            if tb_writer is not None:
+                tb_writer.add_image('Outputs', image, iter_count)
+        return masked_loss
+
+    def calculate_test_target_loss(self, outputs, batch_y, test_target, forecast_steps=0):
+        loss = self.criterion(outputs[:,-forecast_steps:,test_target], batch_y[:,-forecast_steps:,test_target])
+        return loss
+
+    def calculate_loss_prev(self, outputs, batch_x, batch_y, masked_tokens=None):
         f_dim = -1 if self.args.features == 'MS' else 0
         outputs = outputs[:, -self.args.pred_len:, f_dim:]
         batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-        mask = batch_y != -8
-        loss = self.criterion_non_reduced(outputs, batch_y)
+        
+        # Create a mask where batch_y is not -8
+        valid_mask = batch_y != -8  # Shape: [Batch, Time, Variate]
+        
+        if masked_tokens is not None:
+            # Expand masked_tokens to match the dimensions of outputs and batch_y
+            masked_tokens = masked_tokens.unsqueeze(1).expand(-1, batch_y.size(1), -1)  # Shape: [Batch, Time, Variate]
+            # Combine masks
+            mask = valid_mask & masked_tokens
+        else:
+            mask = valid_mask  # Use valid_mask if masked_tokens is None
+        
+        # Compute the loss without reduction
+        loss = self.criterion_non_reduced(outputs, batch_y)  # Shape: [Batch, Time, Variate]
+        
+        # Apply the mask
         masked_loss = loss * mask.float()
-        masked_loss = masked_loss.sum() / mask.sum()
+        
+        # Ensure that we are not dividing by zero
+        if mask.sum() == 0:
+            masked_loss = torch.tensor(0.0, device=self.device)
+        else:
+            masked_loss = masked_loss.sum() / mask.sum()
+        
+        if False:#random.randint(1, 100) == 1:
+            # Plotting
+            
+            batch_index = 15  # Select the first batch for visualization
+            time_index = 0   # Select the first time step for visualization
+            plt.figure(figsize=(15, 5))
+            
+            plt.subplot(1, 3, 1)
+            plt.imshow(mask[batch_index, :, :].cpu().detach().numpy(), aspect='auto', cmap='gray')
+            plt.title('Mask')
+            plt.colorbar()
+            
+            plt.subplot(1, 3, 2)
+            plt.imshow(batch_y[batch_index, :, :].cpu().detach().numpy(), aspect='auto', cmap='viridis')
+            plt.title('Batch Y')
+            plt.colorbar()
+            
+            plt.subplot(1, 3, 3)
+            plt.imshow(outputs[batch_index, :, :].cpu().detach().numpy(), aspect='auto', cmap='plasma')
+            plt.title('outputs')
+            plt.colorbar()
+            
+            plt.tight_layout()
+            plt.show()
+        
         return masked_loss
 
     def calculate_regression_metrics(self, pred, targets):
@@ -266,15 +405,16 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         pass
 
 
-    def vali(self, vali_data, vali_loader):
+    def vali(self, vali_data, vali_loader, tb_writer=None):
         total_loss = []
+        total_loss_targets = []
         self.model.eval()
         with torch.no_grad():
             batch_x_mark, batch_y_mark = None, None
             #for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
             for i, (batch_x, batch_y) in enumerate(vali_loader):
                 batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float()
+                batch_y = batch_y.float().to(self.device)
 
                 if 'PEMS' in self.args.data or 'Solar' in self.args.data or 'custom' in self.args.data:
                     batch_x_mark = None
@@ -294,15 +434,18 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         else:
                             outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 else:
-                    if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                    else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-                loss = self.calculate_loss(outputs, batch_x, batch_y)
+                    #if self.args.output_attention:
+                    #    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                    #else:
+                    outputs, masked_tokens = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_masked_tokens=True)
+                loss = self.calculate_loss(outputs, batch_x, batch_y, masked_tokens=masked_tokens, tb_writer=tb_writer)
+                loss_target = self.calculate_test_target_loss(outputs, batch_y, vali_loader.dataset.test_target_index, forecast_steps=self.args.forecast_steps)
                 total_loss.append(loss.item())
+                total_loss_targets.append(loss_target.item())
         total_loss = np.average(total_loss)
+        total_loss_targets = np.average(total_loss_targets)
         self.model.train()
-        return total_loss
+        return total_loss, total_loss_targets
 
     def train(self, train_loader, vali_loader):
         #train_data, train_loader = self._get_data(flag='train')
@@ -332,18 +475,19 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 self.model.freeze_encoder()
             print('Model loaded from:', self.model_path)
             # Validate baseline performance of the model
-            vali_loss = self.vali(vali_data, vali_loader)
+            vali_loss, _ = self.vali(vali_data, vali_loader)
             early_stopping(vali_loss, self.model, path)
             if early_stopping.early_stop:
                 print("Early stopping")
                 return self.model
-
+        self.model.tb_writer = writer
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
 
         for epoch in range(self.args.train_epochs):
             iter_count = 0
             train_loss = []
+            train_loss_targets = []
 
             self.model.train()
             epoch_time = time.time()
@@ -370,13 +514,17 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
 
-                if self.args.output_attention:
-                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                else:
-                    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                #if self.args.output_attention:
+                #    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
+                #else:
+                #    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                # If doing masked autoencoding
+                outputs, masked_tokens = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_masked_tokens=True)
 
-                loss = self.calculate_loss(outputs, batch_x, batch_y)
+                loss = self.calculate_loss(outputs, batch_x, batch_y, masked_tokens=masked_tokens, tb_writer=writer, iter_count=i+1)
+                train_loss_target = self.calculate_test_target_loss(outputs, batch_y, train_loader.dataset.test_target_index, forecast_steps=self.args.forecast_steps)
                 train_loss.append(loss.item())
+                train_loss_targets.append(train_loss_target.item())
 
                 if (i + 1) % 100 == 0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
@@ -387,14 +535,17 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     iter_count = 0
                     time_now = time.time()
                     writer.add_scalar('Loss/train_iters', loss.item(), epoch * train_steps + i)
+                    writer.add_scalar('Loss/train_target_iters', train_loss_target.item(), epoch * train_steps + i)
                 
                 if (i + 1) % 5000 == 0:
-                    vali_loss = self.vali(vali_data, vali_loader)
+                    vali_loss, vali_loss_target = self.vali(vali_data, vali_loader)
                     print("\titers: {0}, epoch: {1} | val_loss: {2:.7f}".format(i + 1, epoch + 1, vali_loss))
                     time_now = time.time()
 
                     #vali_loss = self.vali(vali_data, vali_loader, criterion)
                     writer.add_scalar('Loss/val_iters', vali_loss, epoch * train_steps + i)
+                    writer.add_scalar('Loss/val_target_iters', vali_loss_target, epoch * train_steps + i)
+
 
                 if self.args.use_amp:
                     scaler.scale(loss).backward()
@@ -406,10 +557,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
+            train_loss_targets = np.average(train_loss_targets)
             #writer.add_scalar('Loss/train', loss.item(), epoch * len(train_loader) + i)
             writer.add_scalar('Loss/train', train_loss, epoch)
-            vali_loss = self.vali(vali_data, vali_loader)
+            writer.add_scalar('Loss/train_target', train_loss_targets, epoch)
+            vali_loss, vali_loss_target = self.vali(vali_data, vali_loader)
             writer.add_scalar('Loss/val', vali_loss, epoch)
+            writer.add_scalar('Loss/val_target', vali_loss_target, epoch)
             #test_loss = self.vali(test_data, test_loader, criterion)
 
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
@@ -503,6 +657,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 outputs = outputs.detach().cpu().numpy()
                 batch_y = batch_y.detach().cpu().numpy()
                 batch_y = np.where(np.isin(batch_y, [-8, -9]), np.nan, batch_y)
+
+                current_day_channels = []
+                for x in range(self.args.n_features):
+                    current_day_channels.append(x*(self.args.history_of_days+1))
+                outputs = outputs[:,:,current_day_channels]
+                batch_y = batch_y[:,:,current_day_channels]
                 #Would prefer to remove the scaling here
                 pred = scaler.inverse_transform(outputs.reshape(-1, outputs.shape[-1])).reshape(outputs.shape)
                 true = scaler.inverse_transform(batch_y.reshape(-1, batch_y.shape[-1])).reshape(batch_y.shape)
