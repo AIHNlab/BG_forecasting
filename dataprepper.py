@@ -8,7 +8,7 @@ class DataPrepper:
     def __init__(self, participants, dataframes, specific_participant=None, 
                  forecast_steps=24, scaler_class_x = None, scaler_class_y = None, sequence_length = 25, indices_per_day=288,
                  feature_list = ['cbg', 'basal', 'carbInput', 'bolus'], target_list = ['cbg'],
-                 step = 1, allowed_missing_values_rate = [0.5,1.0,1.0,1.0], allowed_missing_values_rate_target = [0.0], fill_types=None, experiment_path=None, history_of_days=0):
+                 step = 1, allowed_missing_values_rate = [0.5,1.0,1.0], allowed_missing_values_rate_target = [0.0,1.0,1.0], fill_types=None, experiment_path=None, history_of_days=0):
 
         self.participants = participants
 
@@ -62,16 +62,19 @@ class DataPrepper:
                 self.handle_missing_values(targets, self.target_list, np.full(len(self.target_list), -8))
                 
 
-                # Create new columns for each feature for the previous history_of_days days
                 for feature in self.feature_list:
+                    feature_index = features.columns.get_loc(feature) + 1
                     for day in range(1, self.history_of_days + 1):
                         new_column_name = f"{feature}_prevday{day}"
-                        features[new_column_name] = features[feature].shift(day * self.indices_per_day, fill_value=-9)
+                        features.insert(feature_index, new_column_name, features[feature].shift(day * self.indices_per_day, fill_value=-9))
+                        feature_index += 1
 
                 for feature in self.target_list:
+                    feature_index = targets.columns.get_loc(feature) + 1
                     for day in range(1, self.history_of_days + 1):
                         new_column_name = f"{feature}_prevday{day}"
-                        targets[new_column_name] = targets[feature].shift(day * self.indices_per_day, fill_value=-9)
+                        targets.insert(feature_index, new_column_name, targets[feature].shift(day * self.indices_per_day, fill_value=-9))
+                        feature_index += 1
 
                 features_seq, target_seq = self._create_sequences(features, features_missing_mask,targets, targets_missing_mask)
                         # Check for missing values
