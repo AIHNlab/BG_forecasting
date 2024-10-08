@@ -1,0 +1,91 @@
+{
+    "hp_config": {
+        "batch_size": 32,
+        "num_epochs": 100,
+        "learning_rate": 1e-05,
+        "input_dim": 4,
+        "hidden_dim": 5,
+        "output_dim": 1,
+        "encoder_layers": 6,
+        "forecast_steps": 24,
+        "architecture": "iTransformerMasked",
+        "token_size": 1024,
+        "history_of_days": 7,
+        "days_to_mask": 0,
+        "forecast_horizons": [
+            6,
+            12,
+            24
+        ],
+        "feature_window": 96,
+        "freeze_encoder": false,
+        "n_features": 3
+    },
+    "run_config": {
+        "experiment_path": "/experiments/Testing2",
+        "dataset_names": [
+            "Ohio2018",
+            "Ohio2020"
+        ],
+        "dataloaders": [
+            "DataloaderOhio",
+            "DataloaderOhio"
+        ],
+        "indices_per_day": 288,
+        "features": [
+            "cbg",
+            "iob",
+            "cob"
+        ],
+        "allowed_missing_values_rate": [
+            0.5,
+            1.0,
+            1.0
+        ],
+        "targets": [
+            "cbg",
+            "iob",
+            "cob"
+        ],
+        "allowed_missing_values_rate_target": [
+            0.0,
+            1.0,
+            1.0
+        ],
+        "fill_types": [
+            "mean"
+        ],
+        "test_target": "cbg",
+        "step_training": 10,
+        "train": false,
+        "test": true,
+        "train_participants": "all",
+        "test_participants": "all",
+        "parent_model_path": null,
+        "trainer": "Exp_Long_Term_Forecast",
+        "scaler": "StandardScaler"
+    },
+    "hp_search_config": {
+        "batch_size": [
+            32
+        ],
+        "num_epochs": [
+            1
+        ],
+        "learning_rate": [
+            0.01
+        ],
+        "input_dim": [
+            4
+        ],
+        "hidden_dim": [
+            5
+        ],
+        "output_dim": [
+            1
+        ],
+        "feature_window": [
+            24
+        ]
+    }
+}
