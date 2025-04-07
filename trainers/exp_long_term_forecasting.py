@@ -18,21 +18,158 @@ import io
 import PIL
 from torchvision.transforms import ToTensor
 
+class PeriodicityReshape(nn.Module):
+    def __init__(self, main_cycle):
+        super(PeriodicityReshape, self).__init__()
+        if main_cycle < 1:
+            raise ValueError(f'Invalid main_cycle: {main_cycle}. Must be >= 1.')
+        self.main_cycle = main_cycle
+        
+    def __assert_seq_len(self, x):
+        _, n_steps, _ = x.shape
+        seq_too_long = (n_steps % self.main_cycle) # is > 0 if n_steps is not a multiple of main_cycle -> True
+        if seq_too_long:
+            raise ValueError(f'''Number of steps {n_steps} is not a multiple of the main cycle ({n_steps}%{self.main_cycle}={n_steps%self.main_cycle}).
+                             Suggested: Fill the sequence with zeros at the end to make it a multiple of the main cycle.''') 
+            
+    def apply(self, x, batch_size, n_features):
+        self.__assert_seq_len(x)
+        x = x.reshape(batch_size, -1, self.main_cycle, n_features).permute(0, 3, 1, 2)
+        x = x.reshape(batch_size, -1, self.main_cycle).permute(0, 2, 1)
+        return x
 
-def adjust_learning_rate(optimizer, epoch, args):
-    # lr = args.learning_rate * (0.2 ** (epoch // 2))
-    if args.lradj == 'type1':
-        lr_adjust = {epoch: args.learning_rate * (0.5 ** ((epoch - 1) // 1))}
-    elif args.lradj == 'type2':
-        lr_adjust = {
-            2: 5e-5, 4: 1e-5, 6: 5e-6, 8: 1e-6,
-            10: 5e-7, 15: 1e-7, 20: 5e-8
-        }
-    if epoch in lr_adjust.keys():
-        lr = lr_adjust[epoch]
-        for param_group in optimizer.param_groups:
+    def revert(self,x, batch_size, n_features):
+        x = x.permute(0, 2, 1).reshape(batch_size, n_features, -1, self.main_cycle)
+        x = x.permute(0, 2, 3, 1).reshape(batch_size, -1, n_features)
+        return x
+
+    def forward(self, x, n_features, direction):
+        batch_size = x.shape[0]
+        if direction == 'apply':
+            return self.apply(x, batch_size, n_features)
+        elif direction == 'revert':
+            return self.revert(x, batch_size, n_features)
+        else:
+            raise ValueError(f'Invalid direction: {direction}. Use "apply" or "revert".')
+
+from torch.optim.lr_scheduler import _LRScheduler
+import math
+class CosineAnnealingWarmupRestarts(_LRScheduler):
+    """
+        optimizer (Optimizer): Wrapped optimizer.
+        first_cycle_steps (int): First cycle step size.
+        cycle_mult(float): Cycle steps magnification. Default: -1.
+        max_lr(float): First cycle's max learning rate. Default: 0.1.
+        min_lr(float): Min learning rate. Default: 0.001.
+        warmup_steps(int): Linear warmup step size. Default: 0.
+        gamma(float): Decrease rate of max learning rate by cycle. Default: 1.
+        last_epoch (int): The index of last epoch. Default: -1.
+    """
+    
+    def __init__(self,
+                 optimizer : torch.optim.Optimizer,
+                 first_cycle_steps : int,
+                 cycle_mult : float = 1.,
+                 max_lr : float = 0.1,
+                 min_lr : float = 0.001,
+                 warmup_steps : int = 0,
+                 gamma : float = 1.,
+                 last_epoch : int = -1
+        ):
+        assert warmup_steps < first_cycle_steps
+        
+        self.first_cycle_steps = first_cycle_steps # first cycle step size
+        self.cycle_mult = cycle_mult # cycle steps magnification
+        self.base_max_lr = max_lr # first max learning rate
+        self.max_lr = max_lr # max learning rate in the current cycle
+        self.min_lr = min_lr # min learning rate
+        self.warmup_steps = warmup_steps # warmup step size
+        self.gamma = gamma # decrease rate of max learning rate by cycle
+        
+        self.cur_cycle_steps = first_cycle_steps # first cycle step size
+        self.cycle = 0 # cycle count
+        self.step_in_cycle = last_epoch # step size of the current cycle
+        
+        super(CosineAnnealingWarmupRestarts, self).__init__(optimizer, last_epoch)
+        
+        # set learning rate min_lr
+        self.init_lr()
+    
+    def init_lr(self):
+        self.base_lrs = []
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = self.min_lr
+            self.base_lrs.append(self.min_lr)
+    
+    def get_lr(self):
+        if self.step_in_cycle == -1:
+            return self.base_lrs
+        elif self.step_in_cycle < self.warmup_steps:
+            return [(self.max_lr - base_lr)*self.step_in_cycle / self.warmup_steps + base_lr for base_lr in self.base_lrs]
+        else:
+            return [base_lr + (self.max_lr - base_lr) \
+                    * (1 + math.cos(math.pi * (self.step_in_cycle-self.warmup_steps) \
+                                    / (self.cur_cycle_steps - self.warmup_steps))) / 2
+                    for base_lr in self.base_lrs]
+
+    def step(self, epoch=None):
+        if epoch is None:
+            epoch = self.last_epoch + 1
+            self.step_in_cycle = self.step_in_cycle + 1
+            if self.step_in_cycle >= self.cur_cycle_steps:
+                self.cycle += 1
+                self.step_in_cycle = self.step_in_cycle - self.cur_cycle_steps
+                self.cur_cycle_steps = int((self.cur_cycle_steps - self.warmup_steps) * self.cycle_mult) + self.warmup_steps
+        else:
+            if epoch >= self.first_cycle_steps:
+                if self.cycle_mult == 1.:
+                    self.step_in_cycle = epoch % self.first_cycle_steps
+                    self.cycle = epoch // self.first_cycle_steps
+                else:
+                    n = int(math.log((epoch / self.first_cycle_steps * (self.cycle_mult - 1) + 1), self.cycle_mult))
+                    self.cycle = n
+                    self.step_in_cycle = epoch - int(self.first_cycle_steps * (self.cycle_mult ** n - 1) / (self.cycle_mult - 1))
+                    self.cur_cycle_steps = self.first_cycle_steps * self.cycle_mult ** (n)
+            else:
+                self.cur_cycle_steps = self.first_cycle_steps
+                self.step_in_cycle = epoch
+                
+        self.max_lr = self.base_max_lr * (self.gamma**self.cycle)
+        self.last_epoch = math.floor(epoch)
+        for param_group, lr in zip(self.optimizer.param_groups, self.get_lr()):
+            print("Setting learning rate to:", lr)
             param_group['lr'] = lr
-        print('Updating learning rate to {}'.format(lr))
+
+def adjust_learning_rate(optimizer, epoch, args, training_steps):
+    if args.lradj == 'cosine_annealing_warmup':
+        if not hasattr(adjust_learning_rate, 'scheduler'):
+            total_lr_intervals = (training_steps * args.train_epochs) // args.lr_update_interval
+            adjust_learning_rate.scheduler = CosineAnnealingWarmupRestarts(
+                optimizer,
+                first_cycle_steps=int(total_lr_intervals*0.2),#args.first_cycle_steps,
+                cycle_mult=1,#args.cycle_mult,
+                max_lr=args.learning_rate,#args.max_lr,
+                min_lr=0.0000000,#args.min_lr,
+                warmup_steps=int(total_lr_intervals*0.03),#args.warmup_steps,
+                gamma=1#args.gamma
+
+            )
+        adjust_learning_rate.scheduler.step(epoch)
+    else:
+        if args.lradj == 'type1':
+            lr_adjust = {epoch: args.learning_rate * (0.5 ** ((epoch - 1) // 1))}
+        elif args.lradj == 'type2':
+            lr_adjust = {
+                2: 5e-5, 4: 1e-5, 6: 5e-6, 8: 1e-6,
+                10: 5e-7, 15: 1e-7, 20: 5e-8
+            }
+        if epoch in lr_adjust.keys():
+            lr = lr_adjust[epoch]
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
+            print('Updating learning rate to {}'.format(lr))
+    for param_group in optimizer.param_groups:
+        return param_group['lr']
 
 def visual(true, preds=None, name='./pic/test.pdf'):
     """
@@ -129,11 +266,14 @@ class Args:
         self.itr = 1
         self.train_epochs = hp_config['num_epochs']#10
         self.batch_size = hp_config['batch_size'] #32
-        self.patience = 3
+        self.patience = 100
         self.learning_rate = hp_config['learning_rate']#0.0001
         self.des = 'test'
         self.loss = 'MSE'
-        self.lradj = 'type1'
+        #self.lradj = 'type1'
+        self.lradj = hp_config['lradj']
+        self.lr_update_interval = hp_config['lr_update_interval']
+        self.weight_decay = hp_config['weight_decay']
         self.use_amp = False
         self.use_gpu = True if torch.cuda.is_available() else False
         self.gpu = 0
@@ -148,6 +288,8 @@ class Args:
         self.efficient_training = False
         self.use_norm = False#True
         self.partial_start_index = 0
+        self.patch_size = hp_config['patch_size']
+        self.mask_ratio = hp_config['mask_ratio']
 
         if self.use_gpu and self.use_multi_gpu:
             self.devices = self.devices.replace(' ', '')
@@ -170,7 +312,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         self.criterion_forecast = nn.MSELoss()
         self.criterion_imputation = nn.MSELoss()
         self.criterion_alarm = nn.CrossEntropyLoss()
-        self.criterion_uncertainty = nn.GaussianNLLLoss()
+        self.criterion_uncertainty = nn.GaussianNLLLoss(reduction='none')
+        self.periodicity_reshape = PeriodicityReshape(main_cycle=args.patch_size)
         super(Exp_Long_Term_Forecast, self).__init__(args)
 
     def _build_model(self):
@@ -220,22 +363,24 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         return data_set, data_loader
 
     def _select_optimizer(self):
-        model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
+        model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate, weight_decay=self.args.weight_decay)
         return model_optim
 
     def _select_criterion(self):
         criterion = nn.MSELoss()
         return criterion
     
-    def calculate_loss(self, outputs, batch_x, batch_y, masked_tokens=None, tb_writer=None, iter_count=None):
+    def calculate_loss(self, outputs, batch_x, batch_y, outputs_var=None, tb_writer=None, iter_count=None):
         """
-        Calculates the loss using a combined mask where batch_x and batch_y are different
-        and batch_y is not -8.
+        Calculates the loss using either MSE or GaussianNLLLoss depending on whether variance predictions are provided.
         
         Args:
-            outputs (torch.Tensor): The model outputs of shape [Batch, Time, Variate].
+            outputs (torch.Tensor): The model outputs (mean predictions) of shape [Batch, Time, Variate].
             batch_x (torch.Tensor): The input tensor of shape [Batch, Time, Variate].
             batch_y (torch.Tensor): The target tensor of shape [Batch, Time, Variate].
+            outputs_var (torch.Tensor, optional): The model's variance predictions of shape [Batch, Time, Variate].
+            tb_writer (SummaryWriter, optional): TensorBoard writer for logging.
+            iter_count (int, optional): Current iteration count for logging.
             
         Returns:
             torch.Tensor: The masked loss.
@@ -243,36 +388,43 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         # Create the difference mask
         difference_mask = (batch_x != batch_y).float()
         
-        # Create the valid mask where batch_y is not -8
+        # Create the valid mask where batch_y is not -8 or -9
         valid_mask = ((batch_y != -8) & (batch_y != -9)).float()
         
         # Combine the masks
         combined_mask = difference_mask * valid_mask
         
-        # Compute the loss without reduction
-        loss = self.criterion_non_reduced(outputs, batch_y)
+        if outputs_var is None:
+            # Use MSE loss if no variance predictions are provided
+            loss = self.criterion_non_reduced(outputs, batch_y)
+        else:
+            # Use GaussianNLL loss when variance predictions are provided
+            # Ensure variance is positive
+            outputs_var = torch.clamp(outputs_var, min=1e-6)
+            loss = self.criterion_uncertainty(outputs, batch_y, outputs_var)
         
-        # Apply the combined mask
-        masked_loss = loss * combined_mask
+        # Apply the combined mask while maintaining gradients
+        masked_loss = loss * combined_mask.to(outputs.device)
         
         # Normalize the masked loss
         if combined_mask.sum() == 0:
-            masked_loss = torch.tensor(0.0, device=outputs.device)
+            # Return a differentiable zero tensor
+            masked_loss = torch.zeros(1, requires_grad=True, device=outputs.device)
         else:
-            masked_loss = masked_loss.sum() / combined_mask.sum()
+            masked_loss = masked_loss.sum() / (combined_mask.sum() + 1e-6)  # Add small epsilon to avoid division by zero
       
         if iter_count is not None and iter_count % 5000 == 0:  # Plotting condition
             # Plotting
             batch_index = 15  # Select the first batch for visualization
             # Replace -8 and -9 with NaN
             batch_y = batch_y.clone()
-            batch_y[(batch_y == -8) | (batch_y == -9)] = np.nan
+            batch_y[(batch_y == -8) | (batch_y == -9) | (batch_y == -6)] = np.nan
 
             batch_x = batch_x.clone()
-            batch_x[(batch_x == -8) | (batch_x == -9)] = np.nan
+            batch_x[(batch_x == -8) | (batch_x == -9) | (batch_x == -6)] = np.nan
 
             outputs = outputs.clone()
-            outputs[(outputs == -8) | (outputs == -9)] = np.nan
+            outputs[(outputs == -8) | (outputs == -9) | (outputs == -6)] = np.nan
             # Determine the color scale limits using masks to ignore NaN values
             vmin = min(
                 torch.quantile(batch_x[~torch.isnan(batch_x)], 0.05).item(),
@@ -422,7 +574,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 else:
                     batch_x_mark = batch_x_mark.float().to(self.device)
                     batch_y_mark = batch_y_mark.float().to(self.device)
-
+                batch_x = self.periodicity_reshape(batch_x, self.args.n_features, 'apply')
+                batch_y = self.periodicity_reshape(batch_y, self.args.n_features, 'apply')
                 # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
@@ -437,9 +590,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     #if self.args.output_attention:
                     #    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
                     #else:
-                    outputs, masked_tokens = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_masked_tokens=True)
-                loss = self.calculate_loss(outputs, batch_x, batch_y, masked_tokens=masked_tokens, tb_writer=tb_writer)
-                loss_target = self.calculate_test_target_loss(outputs, batch_y, vali_loader.dataset.test_target_index, forecast_steps=self.args.forecast_steps)
+                    outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True)
+                loss = self.calculate_loss(outputs, batch_x, batch_y, outputs_var=outputs_var, tb_writer=tb_writer)
+                #loss_target = self.calculate_test_target_loss(outputs, batch_y, vali_loader.dataset.test_target_index, forecast_steps=self.args.forecast_steps)
+                loss_target = self.calculate_test_target_loss(outputs, batch_y, 0, forecast_steps=self.args.forecast_steps)
                 total_loss.append(loss.item())
                 total_loss_targets.append(loss_target.item())
         total_loss = np.average(total_loss)
@@ -447,7 +601,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         self.model.train()
         return total_loss, total_loss_targets
 
-    def train(self, train_loader, vali_loader):
+    def train(self, train_loader, vali_loader, return_variance=True):
         #train_data, train_loader = self._get_data(flag='train')
         tb_dir = os.path.dirname(self.model_path)
         log_dir = os.path.join(tb_dir, 'logs', time.strftime("%Y%m%d-%H%M%S"))
@@ -483,7 +637,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         self.model.tb_writer = writer
         if self.args.use_amp:
             scaler = torch.cuda.amp.GradScaler()
-
+        total_iters = 0
+        lr_intervals = 0
         for epoch in range(self.args.train_epochs):
             iter_count = 0
             train_loss = []
@@ -496,10 +651,16 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             batch_x_mark, batch_y_mark = None, None
             for i, (batch_x, batch_y) in enumerate(train_loader):
                 iter_count += 1
+                total_iters += 1
                 model_optim.zero_grad()
                 batch_x = batch_x.float().to(self.device)
-
                 batch_y = batch_y.float().to(self.device)
+
+
+                batch_x = self.periodicity_reshape(batch_x, self.args.n_features, 'apply')
+                batch_y = self.periodicity_reshape(batch_y, self.args.n_features, 'apply')
+
+                #batch_x[:, -2:, :] = -7
                 #states = torch.zeros_like(batch_y) # Hypoglycemia
                 #states[batch_y > 70] = 1 # Normal
                 #states[batch_y > 180] = 2 # Hyperglycemia
@@ -519,10 +680,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 #else:
                 #    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 # If doing masked autoencoding
-                outputs, masked_tokens = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_masked_tokens=True)
+                outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=return_variance)
 
-                loss = self.calculate_loss(outputs, batch_x, batch_y, masked_tokens=masked_tokens, tb_writer=writer, iter_count=i+1)
-                train_loss_target = self.calculate_test_target_loss(outputs, batch_y, train_loader.dataset.test_target_index, forecast_steps=self.args.forecast_steps)
+                loss = self.calculate_loss(outputs, batch_x, batch_y, outputs_var=outputs_var,tb_writer=writer, iter_count=total_iters)
+                #train_loss_target = self.calculate_test_target_loss(outputs, batch_y, train_loader.dataset.test_target_index, forecast_steps=self.args.forecast_steps)
+                train_loss_target = self.calculate_test_target_loss(outputs, batch_y, 0, forecast_steps=self.args.forecast_steps)
+
                 train_loss.append(loss.item())
                 train_loss_targets.append(train_loss_target.item())
 
@@ -537,7 +700,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     writer.add_scalar('Loss/train_iters', loss.item(), epoch * train_steps + i)
                     writer.add_scalar('Loss/train_target_iters', train_loss_target.item(), epoch * train_steps + i)
                 
-                if (i + 1) % 5000 == 0:
+                if total_iters % self.args.lr_update_interval == 0:
+
                     vali_loss, vali_loss_target = self.vali(vali_data, vali_loader)
                     print("\titers: {0}, epoch: {1} | val_loss: {2:.7f}".format(i + 1, epoch + 1, vali_loss))
                     time_now = time.time()
@@ -545,7 +709,9 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     #vali_loss = self.vali(vali_data, vali_loader, criterion)
                     writer.add_scalar('Loss/val_iters', vali_loss, epoch * train_steps + i)
                     writer.add_scalar('Loss/val_target_iters', vali_loss_target, epoch * train_steps + i)
-
+                    lr_intervals += 1
+                    lr = adjust_learning_rate(model_optim, lr_intervals, self.args, train_steps)
+                    writer.add_scalar('LearningRate', lr, epoch * train_steps + i)
 
                 if self.args.use_amp:
                     scaler.scale(loss).backward()
@@ -573,7 +739,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 print("Early stopping")
                 break
 
-            adjust_learning_rate(model_optim, epoch + 1, self.args)
+            #adjust_learning_rate(model_optim, epoch + 1, self.args)
 
             # get_cka(self.args, setting, self.model, train_loader, self.device, epoch)
 
@@ -592,6 +758,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
         preds = []
         trues = []
+        stds = []
 
         self.model.eval()
         all_forecast = []
@@ -614,112 +781,61 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 else:
                     batch_x_mark = batch_x_mark.float().to(self.device)
                     batch_y_mark = batch_y_mark.float().to(self.device)
-
+                batch_x = self.periodicity_reshape(batch_x, self.args.n_features, 'apply')
+                batch_y = self.periodicity_reshape(batch_y, self.args.n_features, 'apply')
                 # decoder input
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        if self.args.output_attention:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                        else:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                        outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True)
                 else:
-                    if self.args.output_attention:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-
-                    else:
-                        outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
+                    #if self.args.output_attention:
+                    outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True)
 
                 f_dim = -1 if self.args.features == 'MS' else 0
-                #if isinstance(outputs, tuple):
-                #    #for outputs_item in outputs: outputs_item = outputs_item[:, -self.args.pred_len:, f_dim:]
-                #    # Calcu
-                #    batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
-                #    batch_x = batch_x[:, -self.args.seq_len:, f_dim:].to(self.device)
-                #    #outputs = outputs.detach().cpu().numpy()
-                #    batch_y = batch_y.detach().cpu().numpy()
-                #    batch_x = batch_x.detach().cpu().numpy()
-                #    all_forecast.append(outputs[0][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
-                #    all_imputation.append(outputs[1][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
-                #    all_alarm.append(outputs[2][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
-                #    all_uncertainty_forecast.append(outputs[3][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
-                #    all_uncertainty_imputation.append(outputs[4][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy())
-                #    all_batch_y.append(batch_y)
-                #    all_batch_x.append(batch_x)
-                #    outputs = outputs[0][:, -self.args.pred_len:, f_dim:].detach().cpu().numpy()
-                #    pred = scaler.inverse_transform(outputs.reshape(-1, outputs.shape[-1])).reshape(outputs.shape)
-                #    true = scaler.inverse_transform(batch_y.reshape(-1, batch_y.shape[-1])).reshape(batch_y.shape)
-                
+
                 outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                batch_y = batch_y[:, -self.args.pred_len:, f_dim:].to(self.device)
+                batch_y = batch_y[:, -self.args.pred_len:, f_dim:]
+                outputs_var = outputs_var[:, -self.args.pred_len:, f_dim:]
+                outputs_std = torch.sqrt(outputs_var)
+                batch_x = self.periodicity_reshape(batch_x, self.args.n_features, 'revert')
+                batch_y = self.periodicity_reshape(batch_y, self.args.n_features, 'revert')
+                outputs = self.periodicity_reshape(outputs, self.args.n_features, 'revert')
+                outputs_std = self.periodicity_reshape(outputs_std, self.args.n_features, 'revert')
+                
                 outputs = outputs.detach().cpu().numpy()
+                outputs_std = outputs_std.detach().cpu().numpy()
                 batch_y = batch_y.detach().cpu().numpy()
                 batch_y = np.where(np.isin(batch_y, [-8, -9]), np.nan, batch_y)
 
-                current_day_channels = []
-                for x in range(self.args.n_features):
-                    current_day_channels.append(x*(self.args.history_of_days+1))
-                outputs = outputs[:,:,current_day_channels]
-                batch_y = batch_y[:,:,current_day_channels]
-                #Would prefer to remove the scaling here
+                # Store pre-transform values
+                outputs_pre = outputs.copy()
+                batch_y_pre = batch_y.copy()
+
+                # Perform transforms
                 pred = scaler.inverse_transform(outputs.reshape(-1, outputs.shape[-1])).reshape(outputs.shape)
                 true = scaler.inverse_transform(batch_y.reshape(-1, batch_y.shape[-1])).reshape(batch_y.shape)
-                #if np.any(true < 0):
-                #    print("wtf")
- 
-                    #pred = outputs
-                    #true = batch_y
+                std = outputs_std * scaler.scale_[None, None, :] 
 
-                    #plt.plot(scaler.inverse_transform(pred[i]), label='Predicted', linestyle='dashed')
-                    #plt.plot(scaler.inverse_transform(true[i]), label='True')
-                    #plt.ylim(0, 300)
-                    #plt.legend()
-                    #plt.show()
-
-                preds.append(pred)
-                trues.append(true)
+                preds.append(pred[:,-self.args.forecast_steps:,:])
+                trues.append(true[:,-self.args.forecast_steps:,:])
+                stds.append(std[:,-self.args.forecast_steps:,:])
 
         preds = np.array(preds[:-1])
         trues = np.array(trues[:-1])
-        #print('test shape:', preds.shape, trues.shape)
+        stds = np.array(stds[:-1])  # Convert stds to a numpy array
+        #print('test shape:', preds.shape, trues.shape, stds.shape)  # Include stds shape in the print statement
         # Check if trues is empty
         if trues.size == 0:
             print("Warning: 'trues' is empty. Skipping reshaping.")
         else:
             preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
             trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
-        #print('test shape:', preds.shape, trues.shape)
-        #all_forecast = np.concatenate(np.array(all_forecast[:-1]))
-        #all_imputation = np.concatenate(np.array(all_imputation[:-1]))
-        #all_alarm = np.concatenate(np.array(all_alarm[:-1]))
-        #all_uncertainty_forecast = np.concatenate(np.array(all_uncertainty_forecast[:-1]))
-        #all_uncertainty_imputation = np.concatenate(np.array(all_uncertainty_imputation[:-1]))
-        #all_batch_y = np.concatenate(np.array(all_batch_y[:-1]))
-        #all_batch_x = np.concatenate(np.array(all_batch_x[:-1]))
-        #self.calculate_regression_metrics(all_forecast, all_batch_y)
-        #self.calculate_regression_metrics(all_imputation, all_batch_x)
-        #self.calculate_classification_metrics(all_alarm, all_batch_y)
-        #self.calculate_uncertainty_metrics(all_forecast, all_uncertainty_forecast, all_batch_y)
-        #self.calculate_uncertainty_metrics(all_imputation, all_uncertainty_imputation, all_batch_x)
+            stds = stds.reshape(-1, stds.shape[-2], stds.shape[-1])
 
-
-        #mae, mse, rmse, mape, mspe = metric(preds, trues)
-        #print('mse:{}, mae:{}'.format(mse, mae))
-        #f = open("result_long_term_forecast.txt", 'a')
-        #f.write(setting + "  \n")
-        #f.write('mse:{}, mae:{}'.format(mse, mae))
-        #f.write('\n')
-        #f.write('\n')
-        #f.close()
-
-        #np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe]))
-        #np.save(folder_path + 'pred.npy', preds)
-        #np.save(folder_path + 'true.npy', trues)
-        # Assuming `preds` and `trues` are your lists of predictions and true values
-
-        return preds, trues
+        return preds, trues, stds
 
 
     def predict(self, setting, load=False):
