@@ -3,12 +3,14 @@ import numpy as np
 from scaler import Scaler
 from tqdm import tqdm
 import pandas as pd
+from custom_dataset import SequenceDataset
 
 class DataPrepper:
     def __init__(self, participants, dataframes, specific_participant=None, 
-                 forecast_steps=24, scaler_class_x = None, scaler_class_y = None, sequence_length = 25, indices_per_day=288,
+                 forecast_steps=24, scaler_class_x = None, scaler_class_y = None, sequence_length = 25, patch_size=288,
                  feature_list = ['cbg', 'basal', 'carbInput', 'bolus'], target_list = ['cbg'],
-                 step = 1, allowed_missing_values_rate = [0.5,1.0,1.0], allowed_missing_values_rate_target = [0.0,1.0,1.0], fill_types=None, experiment_path=None, history_of_days=0):
+                 step = 1, allowed_missing_values_rate = [0.5,1.0,1.0], allowed_missing_values_rate_target = [0.0,1.0,1.0], fill_types=None, experiment_path=None, history_of_days=0,
+                 test_target="cbg", mask_prob=0.0, chance_of_smbg=0.0, chance_feature_missing=0.0):
 
         self.participants = participants
 
@@ -23,11 +25,18 @@ class DataPrepper:
         self.features_seq = None
         self.target_seq = None
         self.sequence_length = sequence_length
-        self.indices_per_day = indices_per_day
+        self.patch_size = patch_size
         self.step = step
         self.allowed_missing_values_rate = np.array(allowed_missing_values_rate)
         self.allowed_missing_values_rate_target = np.array(allowed_missing_values_rate_target)
         self.history_of_days = history_of_days
+        self.column_dict = {}
+        i = 0
+        self.n_features = len(feature_list)
+        for feature in feature_list:
+            self.column_dict[feature] = i
+            i += 1
+        self.test_target_index = self.column_dict[test_target]
         if experiment_path is not None:
             self.experiment_path = experiment_path
         else:
@@ -39,99 +48,82 @@ class DataPrepper:
         #self.missing_mask = self.handle_missing_values(self.feature_list)
         # Initialize Scaler
         self.scaler_x = Scaler(dataframes=dataframes, features=self.feature_list, scaler=scaler_class_x, missing_mask=None, is_input=True, file_path=experiment_path)
-        self.scaler_y = Scaler(dataframes=dataframes, features=self.target_list, scaler=scaler_class_y, missing_mask=None, is_input=False, file_path=experiment_path)   
+        self.scaler_y = Scaler(dataframes=dataframes, features=self.target_list, scaler=scaler_class_y, missing_mask=None, is_input=False, file_path=experiment_path) 
+        self.test_target = test_target
+        self.mask_prob = mask_prob
+        self.chance_of_smbg = chance_of_smbg
+        self.chance_feature_missing = chance_feature_missing
+    #@profile
     def make_features_and_targetpair(self):
-        participant_sequences = []
-        participant_targets = []
+        participant_datasets = []
+
         for participant in tqdm(self.participants, desc="Processing participants"):
             if participant == self.specific_participant or self.specific_participant is None:
                 df_participant = self.dataframes[participant]
-                #df_participant_missing_mask = self.missing_mask[participant]
+
+                # Convert DataFrames to NumPy arrays
                 features, targets = self._select_features_and_target(df_participant)
-                #features_missing_mask, targets_missing_mask = self._select_features_and_target(df_participant_missing_mask)
-                #is_correct = self.test_missing_mask(df_participant, self.feature_list, features_missing_mask)
 
-                features_missing_mask = features[self.feature_list].isna()
-                targets_missing_mask = targets[self.target_list].isna()
+                features_missing_mask = features[self.feature_list].isna().values
+                targets_missing_mask = targets[self.target_list].isna().values
 
-
-                features = self._normalize(features, self.scaler_x)
-                targets = self._normalize(targets, self.scaler_y)
-
+                features = self._normalize(features, self.scaler_x).values
+                targets = self._normalize(targets, self.scaler_y).values
+                #Pad with -9 in the begginning equal to sequence length
+                features = np.pad(features, ((self.sequence_length, 0), (0, 0)), 'constant', constant_values=-9)
+                targets = np.pad(targets, ((self.sequence_length, 0), (0, 0)), 'constant', constant_values=-9)
                 self.handle_missing_values(features, self.feature_list, self.fill_types)
                 self.handle_missing_values(targets, self.target_list, np.full(len(self.target_list), -8))
-                
 
-                for feature in self.feature_list:
-                    feature_index = features.columns.get_loc(feature) + 1
-                    for day in range(1, self.history_of_days + 1):
-                        new_column_name = f"{feature}_prevday{day}"
-                        features.insert(feature_index, new_column_name, features[feature].shift(day * self.indices_per_day, fill_value=-9))
-                        feature_index += 1
+                dataset = SequenceDataset(
+                    input_data=features,
+                    input_data_missing_mask=features_missing_mask,
+                    target_data=targets,
+                    target_data_missing_mask=targets_missing_mask,
+                    sequence_length=self.sequence_length,
+                    forecast_steps=self.forecast_steps,
+                    step=self.step,
+                    allowed_missing_values_rate=self.allowed_missing_values_rate,
+                    allowed_missing_values_rate_target=self.allowed_missing_values_rate_target,
+                    feature_list=self.feature_list,
+                    target_list=self.target_list,
+                    test_target=self.test_target,
+                    patch_size=self.patch_size,
+                    mask_prob=self.mask_prob,
+                    chance_of_smbg=self.chance_of_smbg,
+                    chance_feature_missing=self.chance_feature_missing
+                )
+                participant_datasets.append(dataset)
 
-                for feature in self.target_list:
-                    feature_index = targets.columns.get_loc(feature) + 1
-                    for day in range(1, self.history_of_days + 1):
-                        new_column_name = f"{feature}_prevday{day}"
-                        targets.insert(feature_index, new_column_name, targets[feature].shift(day * self.indices_per_day, fill_value=-9))
-                        feature_index += 1
+        # Combine all datasets
+        full_dataset = torch.utils.data.ConcatDataset(participant_datasets)
+        return full_dataset
 
-                features_seq, target_seq = self._create_sequences(features, features_missing_mask,targets, targets_missing_mask)
-                        # Check for missing values
-                        #start_idx = day * indices_per_day
-                        #if features[feature].iloc[:start_idx].isna().all():
-                        #    features[new_column_name] = -1
-                        #elif features[feature].iloc[:start_idx].isna().any():
-                        #    features[new_column_name] = np.nan
-                
-                #sequences, targets = self._create_sequences_old(features, features_missing_mask,targets, targets_missing_mask)
-                #features_seq, target_seq = torch.tensor(sequences, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
-                participant_sequences.append(features_seq)
-                participant_targets.append(target_seq)
-
-        self.features_seq = torch.cat(participant_sequences, dim=0)
-        self.target_seq = torch.cat(participant_targets, dim=0)
-        return self.features_seq, self.target_seq
-
-    #def _get_dataframes(self):
-    #    dfs = []
-    #    for participant in self.participants:
-    #        if participant == self.specific_participant or self.specific_participant is None:
-    #            dfs.append(self.dataframes.get_dataframe(participant))
-    #    return dfs
 
     def handle_missing_values(self, df, features, fill_types):
-        # Initialize the missing_mask dictionary to record original missing values
-        #missing_mask = {key: df[features].isna() for key, df in self.dataframes.items()}
-        #missing_mask = {}
-        #for key, df in self.dataframes.items():
-        #    missing_mask[key] = self.dataframes[key][features].copy(deep=True).isna().copy(deep=True)
-        #for key, df in self.dataframes.items():
-        #    self.dataframes[key][features] =  self.dataframes[key][features].copy(deep=True).fillna(-5).copy(deep=True)
-#
-        #for key, df in self.dataframes.items():
-        #    import pandas as pd
-        #    pd.concat([self.dataframes[key], missing_mask[key]], axis=1).to_csv("yo5.csv")
-        #for df_mask in missing_mask.values():
-            #pd.concat([df, df_mask], axis=1).to_csv("yo4.csv")
-            #df_mask.shape
-            #continue
-        for feature, fill_type in zip(features, fill_types):
-            if isinstance(fill_type, str):
-                if fill_type == 'mean':
-                    df[feature].fillna(df[feature].mean(), inplace=True)
+        if isinstance(df, pd.DataFrame):
+            for feature, fill_type in zip(features, fill_types):
+                if isinstance(fill_type, str):
+                    if fill_type == 'mean':
+                        df[feature].fillna(df[feature].mean(), inplace=True)
+                    else:
+                        df[feature].interpolate(method=fill_type, inplace=True)
+                        df[feature].fillna(method='ffill', inplace=True)
+                        df[feature].fillna(method='bfill', inplace=True)
                 else:
-                    df[feature].interpolate(method=fill_type, inplace=True)
-                    df[feature].fillna(method='ffill', inplace=True)
-                    df[feature].fillna(method='bfill', inplace=True)
-            else:
-                #import pandas as pd
-                df[feature].fillna(fill_type, inplace=True)
-#
-                    #    exit()
-        df.dropna(subset=features, inplace=True)
-        
-        #return missing_mask
+                    df[feature].fillna(fill_type, inplace=True)
+            df.dropna(subset=features, inplace=True)
+        else:  # If df is a NumPy array
+            for i, feature in enumerate(features):
+                if isinstance(fill_types[i], str):
+                    if fill_types[i] == 'mean':
+                        mean_value = np.nanmean(df[:, i])  # Compute mean ignoring NaN
+                        df[:, i] = np.where(np.isnan(df[:, i]), mean_value, df[:, i])
+                    else:
+                        raise ValueError(f"Interpolation is not supported for NumPy arrays.")
+                else:
+                    df[:, i] = np.where(np.isnan(df[:, i]), fill_types[i], df[:, i])
+
 
     def _select_features_and_target(self, df):
         features = df[self.feature_list]
@@ -155,43 +147,31 @@ class DataPrepper:
     def _create_sequences(self, input_data, input_data_missing_mask, target_data, target_data_missing_mask):
         sequences = []
         targets = []
-        #features_current_day = [input_data.columns.get_loc(col) for col in target_column.columns]
-        input_data_missing_mask = input_data_missing_mask.to_numpy()
-        target_data_missing_mask = target_data_missing_mask.to_numpy()
-        input_data = input_data.to_numpy()
-        target_data = target_data.to_numpy()
-        
+
+        # Loop over sequences
         for i in range(0, len(input_data) - self.sequence_length - self.forecast_steps, self.step):
-            
-            if self.history_of_days > 0:
-                sequence = input_data[i:i + self.sequence_length].copy()
-                #sequence[self.sequence_length:self.sequence_length + self.forecast_steps, features_current_day] = 0
-                target = target_data[i:i + self.sequence_length].copy()
-            else:
-                sequence = input_data[i:i + self.sequence_length]
-                target = target_data[i + self.sequence_length : i + self.sequence_length + self.forecast_steps]
+            sequence = input_data[i:i + self.sequence_length]
+            target = target_data[i + self.sequence_length : i + self.sequence_length + self.forecast_steps]
+
             sequence_missing_mask = input_data_missing_mask[i:i + self.sequence_length]
-
-            # Calculate the rate of missing values in the sequence
-            missing_values_rate = sequence_missing_mask.mean(axis=0)
-            
-            # If the rate of missing values for any feature is higher than allowed, skip this sequence
-            if any(missing_values_rate > self.allowed_missing_values_rate):
-                continue
-
-            #target = target_column[i + self.sequence_length : i + self.sequence_length + self.forecast_steps]
             target_missing = target_data_missing_mask[i + self.sequence_length : i + self.sequence_length + self.forecast_steps]
 
-
-            missing_values_rate = target_missing.mean(axis=0)
-            # If any target is missing, skip this sequence
-            if any(missing_values_rate > self.allowed_missing_values_rate_target):
+            # Skip sequences with too many missing values
+            if np.any(sequence_missing_mask.mean(axis=0) > self.allowed_missing_values_rate):
                 continue
+            if np.any(target_missing.mean(axis=0) > self.allowed_missing_values_rate_target):
+                continue
+
             sequences.append(sequence)
             targets.append(target)
-        #sequences = np.array(sequences)
-        #targets = np.array(targets)
-        return torch.tensor(sequences, dtype=torch.float32), torch.tensor(targets, dtype=torch.float32)
+
+        # Convert to NumPy array once at the end
+        sequences = np.array(sequences, dtype=np.float32)
+        targets = np.array(targets, dtype=np.float32)
+
+        # Convert once to PyTorch tensors
+        return torch.from_numpy(sequences), torch.from_numpy(targets)
+
 
     def _create_sequences_old(self, input_data, input_data_missing_mask, target_column, target_column_missing_mask):
         sequences = []
