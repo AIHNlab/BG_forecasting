@@ -8,6 +8,40 @@ import numpy as np
 import matplotlib.pyplot as plt
 import random
 
+class PeriodicityReshape(nn.Module):
+    def __init__(self, main_cycle):
+        super(PeriodicityReshape, self).__init__()
+        if main_cycle < 1:
+            raise ValueError(f'Invalid main_cycle: {main_cycle}. Must be >= 1.')
+        self.main_cycle = main_cycle
+        
+    def __assert_seq_len(self, x):
+        _, n_steps, _ = x.shape
+        seq_too_long = (n_steps % self.main_cycle) # is > 0 if n_steps is not a multiple of main_cycle -> True
+        if seq_too_long:
+            raise ValueError(f'''Number of steps {n_steps} is not a multiple of the main cycle ({n_steps}%{self.main_cycle}={n_steps%self.main_cycle}).
+                             Suggested: Fill the sequence with zeros at the end to make it a multiple of the main cycle.''') 
+            
+    def apply(self, x, batch_size, n_features):
+        self.__assert_seq_len(x)
+        x = x.reshape(batch_size, -1, self.main_cycle, n_features).permute(0, 3, 1, 2)
+        x = x.reshape(batch_size, -1, self.main_cycle).permute(0, 2, 1)
+        return x
+
+    def revert(self,x, batch_size, n_features):
+        x = x.permute(0, 2, 1).reshape(batch_size, n_features, -1, self.main_cycle)
+        x = x.permute(0, 2, 3, 1).reshape(batch_size, -1, n_features)
+        return x
+
+    def forward(self, x, n_features, direction):
+        batch_size = x.shape[0]
+        if direction == 'apply':
+            return self.apply(x, batch_size, n_features)
+        elif direction == 'revert':
+            return self.revert(x, batch_size, n_features)
+        else:
+            raise ValueError(f'Invalid direction: {direction}. Use "apply" or "revert".')
+
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000):
         super(PositionalEncoding, self).__init__()
@@ -61,14 +95,34 @@ class ReconstructionHead(nn.Module):
         dec_out = self.projector(enc_out).permute(0, 2, 1)[:, :, :N]
         return dec_out
     
+class ReconstructionHeadFullMLP(nn.Module):
+    def __init__(self, d_model, pred_len, main_cycle, n_features, seq_len):
+        super(ReconstructionHeadFullMLP, self).__init__()
+        self.projector = nn.Linear(d_model, pred_len, bias=True)
+        self.periodicity_reshape = PeriodicityReshape(main_cycle)
+        self.n_features = n_features
+        self.seq_len = seq_len
+        self.full_mlp_layer = nn.Linear(seq_len, seq_len, bias=True)
+
+    def forward(self, enc_out, N):
+        dec_out = self.projector(enc_out).permute(0, 2, 1)[:, :, :N]
+        dec_out = self.periodicity_reshape(dec_out, self.n_features, 'revert')
+        dec_out = dec_out.transpose(-2, -1)
+        dec_out = self.full_mlp_layer(dec_out)
+        dec_out = dec_out.transpose(-2, -1)
+        dec_out = self.periodicity_reshape(dec_out, self.n_features, 'apply')
+
+        return dec_out
+
 class EncoderModel(nn.Module):
     def __init__(self, configs):
         super(EncoderModel, self).__init__()
-        self.seq_len = configs.seq_len
+        self.seq_len = configs.patch_size
         self.d_model = configs.d_model
         self.n_features = configs.n_features
-        self.embed = DataEmbedding_inverted(configs.seq_len, configs.d_model, configs.embed, configs.freq, configs.dropout)
+        self.embed = DataEmbedding_inverted(self.seq_len, configs.d_model, configs.embed, configs.freq, configs.dropout)
         self.positional_encoding = PositionalEncoding(configs.d_model)
+        #self.periodicity_reshape = PeriodicityReshape(self.main_cycle)
         self.encoder = Encoder(
             [
                 EncoderLayer(
@@ -84,8 +138,12 @@ class EncoderModel(nn.Module):
             norm_layer=torch.nn.LayerNorm(configs.d_model)
         )
 
-    def forward(self, x_enc, x_mark_enc, attn_mask):
+    def forward(self, x_enc, x_mark_enc, attn_mask, apply_mask_tokens_fn=None):
         enc_out = self.embed(x_enc, x_mark_enc)
+
+        if apply_mask_tokens_fn is not None:
+            enc_out, masked_tokens = apply_mask_tokens_fn(x_enc, enc_out)
+
         #enc_out = self.positional_encoding(enc_out)
         enc_out_parts = torch.chunk(enc_out, self.n_features, dim=1)  # Split along the second dimension (sequence length)
 
@@ -101,8 +159,8 @@ class EncoderModel(nn.Module):
 class Model(nn.Module):
     def __init__(self, configs):
         super(Model, self).__init__()
-        self.seq_len = configs.seq_len
-        self.pred_len = configs.pred_len
+        self.seq_len = configs.patch_size
+        self.pred_len = configs.patch_size
         self.output_attention = configs.output_attention
         self.use_norm = configs.use_norm
         self.mask_ratio = 0.5 # NB. Not used
@@ -111,15 +169,18 @@ class Model(nn.Module):
         #self.missing_token = torch.ones(1, 1, configs.d_model)  # Initialize with ones
         #self.mask_token = torch.zeros(1, 1, configs.d_model)    # Initialize with zeros
         self.encoder_model = EncoderModel(configs)
-        self.projector_model = ReconstructionHead(configs.d_model, configs.pred_len)
+        #self.projector_model = ReconstructionHead(configs.d_model, self.pred_len)
+        self.projector_model = ReconstructionHeadFullMLP(configs.d_model, self.pred_len, configs.patch_size, configs.n_features, configs.seq_len)
+        self.projector_model_uncertainty = ReconstructionHeadFullMLP(configs.d_model, self.pred_len, configs.patch_size, configs.n_features, configs.seq_len)
         self.tb_writer = None
         self.iter_count = 0
 
     # Should set the embedded token to self.mask_token if the first value of the input is -9
     def apply_mask_tokens(self, input, embedded_tokens, apply_random_tokens=False):
         """
-        Replaces the embedded tokens with self.mask_token where the first value of the input is -9
-        and also replaces the first embedded token with the mask token.
+        Replaces the embedded tokens with self.mask_token where:
+        - first value is -9 (missing values)
+        - first value is -6 (tokens to be masked)
 
         Args:
             input (torch.Tensor): The original input tensor x_enc of shape (Batch, Time, Variate).
@@ -132,16 +193,12 @@ class Model(nn.Module):
         self.missing_token = self.missing_token.to(device)
         self.mask_token = self.mask_token.to(device)
 
-        # Create a mask for the first token
-        random_token_mask = torch.zeros_like(embedded_tokens, dtype=torch.bool)
-        #add historty of days and missing days (also to config)
-        if apply_random_tokens:
-            batch_size, _ , _ = embedded_tokens.shape
-            for i in range(batch_size):
-                random_numbers = [random.randint(0, 30) for _ in range(8)]
-                random_token_mask[i, random_numbers, :] = True
+        # Create mask for tokens where first value is -6
+        random_token_mask = (input[:, 0, :] == -6)  # Shape: (Batch, Variate)
+        random_token_mask = random_token_mask.unsqueeze(-1)  # Shape: (Batch, Variate, 1)
+        random_token_mask = random_token_mask.expand(-1, -1, embedded_tokens.size(-1))  # Shape: (Batch, Variate, d_model)
 
-        # Create a mask where the first value along Time is -9 for each Variate
+        # Create a mask where the first value is -9 for each Variate
         mask = (input[:, 0, :] == -9)  # Shape: (Batch, Variate)
         mask = mask.unsqueeze(-1)      # Shape: (Batch, Variate, 1)
         mask = mask.expand(-1, -1, embedded_tokens.size(-1))  # Shape: (Batch, Variate, d_model)
@@ -149,6 +206,7 @@ class Model(nn.Module):
         # Combine the masks
         combined_mask = random_token_mask & ~mask
         masked_tokens = combined_mask[:,:,1]
+
         # Replace embedded tokens with mask_token where random_token_mask is True
         embedded_tokens = torch.where(random_token_mask, self.mask_token, embedded_tokens)
 
@@ -157,7 +215,7 @@ class Model(nn.Module):
 
         return embedded_tokens, masked_tokens
 
-    def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec, return_masked_tokens=False):
+    def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance=False):
         device = x_enc.device
         attn_mask = NegativeNineMask(x_enc.transpose(1, 2), num_heads=8, device=x_enc.device, completly_remove_missing=False)
         #attn_mask = None
@@ -168,36 +226,38 @@ class Model(nn.Module):
             x_enc /= stdev
 
         _, _, N = x_enc.shape
-        enc_out, attns = self.encoder_model(x_enc, x_mark_enc, attn_mask=attn_mask)
-        enc_out, masked_tokens = self.apply_mask_tokens(x_enc, enc_out, apply_random_tokens=False)
+        enc_out, attns = self.encoder_model(x_enc, x_mark_enc, attn_mask=attn_mask, apply_mask_tokens_fn=self.apply_mask_tokens)
+        #enc_out, masked_tokens = self.apply_mask_tokens(x_enc, enc_out, apply_random_tokens=False)
         #masked_tokens = None
         dec_out = self.projector_model(enc_out, N)
+        if return_variance:
+            dec_out_uncertainty = self.projector_model_uncertainty(enc_out, N)
 
         if self.use_norm:
             dec_out = dec_out * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
             dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
         #if random.randint(1, 100) == 1:
         if self.iter_count % 5000 == 0:
-            self.plot_attention(x_enc, enc_out, attns, dec_out, masked_tokens)
-        if return_masked_tokens:
-            return dec_out, masked_tokens
+            self.plot_attention(x_enc, enc_out, attns, dec_out)
+        if return_variance:
+            return dec_out, dec_out_uncertainty
         else:
             return dec_out
 
-    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None,return_masked_tokens=False):
+    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None,return_variance=False):
         self.iter_count += 1
-        if return_masked_tokens:
-            dec_out, masked_tokens = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_masked_tokens)
-            return dec_out[:, -self.pred_len:, :], masked_tokens
+        if return_variance:
+            dec_out, dec_out_uncertainty = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance=True)
+            return dec_out[:, -self.pred_len:, :], dec_out_uncertainty
         else:
-            dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_masked_tokens)
-            return dec_out[:, -self.pred_len:, :]
+            dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance)
+            return dec_out[:, -self.pred_len:, :], None
 
     def freeze_encoder(self):
         for param in self.encoder_model.parameters():
             param.requires_grad = False
 
-    def plot_attention(self, x_enc, enc_out, attns, dec_out, masked_tokens):
+    def plot_attention(self, x_enc, enc_out, attns, dec_out):
         found = False
         #for i in range(x_enc.shape[0]):
         #    batch = masked_tokens[i]
@@ -239,6 +299,7 @@ class Model(nn.Module):
         #attention_applied = attention_weights * input_data_sample.T       # Shape: (L_k, N)
         #attention_applied = attention_applied.T
         input_data_with_nan = np.where(input_data == -9, np.nan, input_data)
+        input_data_cleaned= np.where(input_data_with_nan == -6, np.nan, input_data)
         # Now plot all in subplots
         plt.figure(figsize=(20, 12))
         # Determine the common color scale range
@@ -247,15 +308,15 @@ class Model(nn.Module):
         dec_out_np[batch_index][:, np.isnan(input_data_with_nan[batch_index]).any(axis=0)] = np.nan
         vmin = min(
             np.nanquantile(dec_out_np[batch_index], 0.05),
-            np.nanquantile(input_data_with_nan[batch_index], 0.05)
+            np.nanquantile(input_data_cleaned[batch_index], 0.05)
         )
         vmax = max(
             np.nanquantile(dec_out_np[batch_index], 0.95),
-            np.nanquantile(input_data_with_nan[batch_index], 0.95)
+            np.nanquantile(input_data_cleaned[batch_index], 0.95)
         )
         # Subplot 1: Input Data
         plt.subplot(2, 2, 1)
-        plt.imshow(input_data_with_nan[batch_index], cmap='viridis', aspect='auto', vmin=vmin, vmax=vmax)  # Visualizing the first batch
+        plt.imshow(input_data_cleaned[batch_index], cmap='viridis', aspect='auto', vmin=vmin, vmax=vmax)  # Visualizing the first batch
         plt.colorbar()
         plt.title('Input Data')
         plt.xlabel('Time Step')
