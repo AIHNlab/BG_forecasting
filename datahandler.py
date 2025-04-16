@@ -6,6 +6,7 @@ import simplejson as json
 from dataloaders.dataloader import Dataloader
 from dataloaders.dataloader_ohio import DataloaderOhio
 from dataloaders.dataloader_tidepool_sap100 import DataloaderTidepoolSAP100
+from dataloaders.dataloader_t1dexi import DataloaderT1DEXI
 from dataloaders.dataloader_fitbit_isphyncs import DataloaderFTBiSPHYNCS
 from dataloaders.dataloader_merged import DataloaderMerged
 
@@ -116,6 +117,7 @@ class CompactArrayEncoder(json.JSONEncoder):
         return '[' + ', '.join(parts) + ']'
 if __name__ == "__main__":
     #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Ohio Data\Ohio_XML" ; data_handler = DataHandler("DataloaderOhio", dataset_path, dataset_name='Ohio2018')
-    dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Ohio Data\Ohio2020_XML" ; data_handler = DataHandler("DataloaderOhio", dataset_path, dataset_name='Ohio2020')
+    #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Ohio Data\Ohio2020_XML" ; data_handler = DataHandler("DataloaderOhio", dataset_path, dataset_name='Ohio2020')
+    dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\T1DEXI" ; data_handler = DataHandler("DataloaderT1DEXI", dataset_path, dataset_name='T1DEXI')
     #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data" ; data_handler = DataHandler("DataloaderTidepoolSAP100", dataset_path, dataset_name='Tidepool_SAP100')
-    data_handler.load_data(load_from_pkl = True, save_as_pkl=True, save_as_csv=True, reload_metadata=True)
+    data_handler.load_data(load_from_pkl = False, save_as_pkl=True, save_as_csv=True, reload_metadata=True)
