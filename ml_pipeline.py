@@ -117,7 +117,7 @@ def train_model(config, full_dataset, fitted_scaler_y):
     trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth',retrain_model=retrain_model)
     trainer.train(train_loader, val_loader)
 
-def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participants):
+def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participants, metadata):
     plot_data = {horizon: [] for horizon in config['hp_config']['forecast_horizons']}
     rmses = {horizon: [] for horizon in config['hp_config']['forecast_horizons']}
     rmse_df = pd.DataFrame(columns=['Participant'] + [f'RMSE_{horizon}' for horizon in config['hp_config']['forecast_horizons']])
@@ -143,7 +143,8 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
                               history_of_days=config['hp_config']['history_of_days'],
                               mask_prob=config['hp_config']['mask_ratio'],
                               chance_of_smbg=config['hp_config']['chance_of_smbg'],
-                              chance_feature_missing=config['hp_config']['chance_feature_missing']
+                              chance_feature_missing=config['hp_config']['chance_feature_missing'],
+                              metadata=metadata,
                               )
         testset = prepper.make_features_and_targetpair()
         #test_data = CustomDataset(features_test, target_test, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
@@ -376,7 +377,8 @@ def main(config, train=True, test=True):
                               history_of_days=config['hp_config']['history_of_days'],
                               mask_prob=config['hp_config']['mask_ratio'],
                               chance_of_smbg=config['hp_config']['chance_of_smbg'],
-                              chance_feature_missing=config['hp_config']['chance_feature_missing']
+                              chance_feature_missing=config['hp_config']['chance_feature_missing'],
+                              metadata=data_handler.get_train_metadata(),
                               )
         dataset = prepper.make_features_and_targetpair()
         #prepper = DataPrepper(participants_test, data_handler, feature_list=config['run_config']['features'], data_type="test", forecast_steps=config['run_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'])
@@ -389,7 +391,7 @@ def main(config, train=True, test=True):
         else:
             participants_test = config['run_config']['test_participants']
 
-        evaluate_model(config, data_handler.get_test_dataframes(), scaler_class_x, scaler_class_y, participants=participants_test)
+        evaluate_model(config, data_handler.get_test_dataframes(), scaler_class_x, scaler_class_y, participants=participants_test, metadata=data_handler.get_test_metadata())
 
 if __name__ == "__main__":
     # Assumes that the dataset is already processed to standardized format
@@ -434,7 +436,7 @@ if __name__ == "__main__":
     #data_handler.load_data(save_as_csv=True)
     #data_handler = DataHandler("DataloaderTidepoolSAP100", r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data", dataset_name="Tidepool_SAP100")
     #data_handler.load_data(save_as_csv=True)
-    experiment_path = os.path.join('experiments','ActualUncertaintyTidepoolEval')
+    experiment_path = os.path.join('experiments','Demographics')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'

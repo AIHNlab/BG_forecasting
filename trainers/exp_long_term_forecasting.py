@@ -564,9 +564,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         with torch.no_grad():
             batch_x_mark, batch_y_mark = None, None
             #for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
-            for i, (batch_x, batch_y) in enumerate(vali_loader):
+            for i, (batch_x, batch_y, metadata) in enumerate(vali_loader):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
+                for k, v in metadata.items():
+                    if isinstance(v, torch.Tensor):
+                        metadata[k] = v.float().to(self.device)
 
                 if 'PEMS' in self.args.data or 'Solar' in self.args.data or 'custom' in self.args.data:
                     batch_x_mark = None
@@ -590,7 +593,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     #if self.args.output_attention:
                     #    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
                     #else:
-                    outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True)
+                    outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True, metadata=metadata)
                 loss = self.calculate_loss(outputs, batch_x, batch_y, outputs_var=outputs_var, tb_writer=tb_writer)
                 #loss_target = self.calculate_test_target_loss(outputs, batch_y, vali_loader.dataset.test_target_index, forecast_steps=self.args.forecast_steps)
                 loss_target = self.calculate_test_target_loss(outputs, batch_y, 0, forecast_steps=self.args.forecast_steps)
@@ -649,12 +652,16 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             #This needs to be added back to support timestamps
             #for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
             batch_x_mark, batch_y_mark = None, None
-            for i, (batch_x, batch_y) in enumerate(train_loader):
+            for i, (batch_x, batch_y, metadata) in enumerate(train_loader):
                 iter_count += 1
                 total_iters += 1
                 model_optim.zero_grad()
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
+                for k, v in metadata.items():
+                    if isinstance(v, torch.Tensor):
+                        metadata[k] = v.float().to(self.device)
+                #metadata = metadata.to(self.device)
 
 
                 batch_x = self.periodicity_reshape(batch_x, self.args.n_features, 'apply')
@@ -680,7 +687,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 #else:
                 #    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 # If doing masked autoencoding
-                outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=return_variance)
+                outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=return_variance, metadata=metadata)
 
                 loss = self.calculate_loss(outputs, batch_x, batch_y, outputs_var=outputs_var,tb_writer=writer, iter_count=total_iters)
                 #train_loss_target = self.calculate_test_target_loss(outputs, batch_y, train_loader.dataset.test_target_index, forecast_steps=self.args.forecast_steps)
@@ -771,9 +778,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         with torch.no_grad():
             #for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
             batch_x_mark, batch_y_mark = None, None
-            for i, (batch_x, batch_y, ) in enumerate(test_loader):
+            for i, (batch_x, batch_y, metadata) in enumerate(test_loader):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
+                for k, v in metadata.items():
+                    if isinstance(v, torch.Tensor):
+                        metadata[k] = v.float().to(self.device)
 
                 if 'PEMS' in self.args.data or 'Solar' in self.args.data or 'custom' in self.args.data:
                     batch_x_mark = None
@@ -789,10 +799,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
-                        outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True)
+                        outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True, metadata=metadata)
                 else:
                     #if self.args.output_attention:
-                    outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True)
+                    outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True, metadata=metadata)
 
                 f_dim = -1 if self.args.features == 'MS' else 0
 

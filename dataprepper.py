@@ -10,7 +10,7 @@ class DataPrepper:
                  forecast_steps=24, scaler_class_x = None, scaler_class_y = None, sequence_length = 25, patch_size=288,
                  feature_list = ['cbg', 'basal', 'carbInput', 'bolus'], target_list = ['cbg'],
                  step = 1, allowed_missing_values_rate = [0.5,1.0,1.0], allowed_missing_values_rate_target = [0.0,1.0,1.0], fill_types=None, experiment_path=None, history_of_days=0,
-                 test_target="cbg", mask_prob=0.0, chance_of_smbg=0.0, chance_feature_missing=0.0):
+                 test_target="cbg", mask_prob=0.0, chance_of_smbg=0.0, chance_feature_missing=0.0, metadata=None, rolling_mean_window=None):
 
         self.participants = participants
 
@@ -19,6 +19,7 @@ class DataPrepper:
         self.forecast_steps = forecast_steps
         self.feature_list = feature_list
         self.target_list = target_list
+        self.metadata = metadata
         self.df = None
         self.features = None
         self.target = None
@@ -53,14 +54,20 @@ class DataPrepper:
         self.mask_prob = mask_prob
         self.chance_of_smbg = chance_of_smbg
         self.chance_feature_missing = chance_feature_missing
+        self.rolling_mean_window = rolling_mean_window
     #@profile
     def make_features_and_targetpair(self):
         participant_datasets = []
 
         for participant in tqdm(self.participants, desc="Processing participants"):
             if participant == self.specific_participant or self.specific_participant is None:
-                df_participant = self.dataframes[participant]
-
+                df_participant = self.dataframes[participant]#.rolling(window=12, min_periods=1).mean()
+                  # Add or remove columns as needed
+                for i, feature in enumerate(self.feature_list):
+                    if feature in df_participant.columns:
+                        if self.rolling_mean_window is not None:
+                            df_participant[feature] = df_participant[feature].rolling(window=self.rolling_mean_window[i], min_periods=1).mean()
+                #df_participant = self.dataframes[participant]
                 # Convert DataFrames to NumPy arrays
                 features, targets = self._select_features_and_target(df_participant)
 
@@ -91,7 +98,8 @@ class DataPrepper:
                     patch_size=self.patch_size,
                     mask_prob=self.mask_prob,
                     chance_of_smbg=self.chance_of_smbg,
-                    chance_feature_missing=self.chance_feature_missing
+                    chance_feature_missing=self.chance_feature_missing,
+                    metadata=self.metadata[participant]
                 )
                 participant_datasets.append(dataset)
 
@@ -105,7 +113,7 @@ class DataPrepper:
             for feature, fill_type in zip(features, fill_types):
                 if isinstance(fill_type, str):
                     if fill_type == 'mean':
-                        df[feature].fillna(df[feature].mean(), inplace=True)
+                        df[feature].fillna(df[feature].mean(), inplace=True)#.rolling(window=12, min_periods=1).mean()
                     else:
                         df[feature].interpolate(method=fill_type, inplace=True)
                         df[feature].fillna(method='ffill', inplace=True)

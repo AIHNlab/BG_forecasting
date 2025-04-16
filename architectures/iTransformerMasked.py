@@ -137,10 +137,95 @@ class EncoderModel(nn.Module):
             ],
             norm_layer=torch.nn.LayerNorm(configs.d_model)
         )
+        # Define tokens using ParameterDict for more compact code
+        self.categorical_tokens = nn.ParameterDict({
+            # diagnosis_type
+            "type1": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "type2": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "prediabetes": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "normal": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "unknown_diagnosis_type": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            # biological_sex
+            "male": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "female": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "other": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "unknown_biological_sex": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            # insulin treatment
+            "open_loop": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "closed_loop": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "hybrid_closed_loop": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "no_insulin": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "unknown_insulin_treatment": nn.Parameter(torch.randn(1, 1, configs.d_model)), 
+            # unknown numerical values
+            "unknown_age": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "unknown_bmi": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+        })
 
-    def forward(self, x_enc, x_mark_enc, attn_mask, apply_mask_tokens_fn=None):
+        self.numerical_embeddings = nn.ModuleDict({
+            "age": nn.Linear(1, configs.d_model),
+            "bmi": nn.Linear(1, configs.d_model)
+        })
+
+    def embed_metadata(self, metadata, batch_size):
+        # Define metadata types and their corresponding unknown token names
+        metadata_types = ["diagnosis_type", "biological_sex", "insulin_treatment"]
+        numerical_types = ["age", "bmi"]
+        # Check if metadata is provided
+        if metadata is None:
+            # If no metadata, use all unknown tokens expanded to batch size
+            all_tokens = [self.categorical_tokens[f"unknown_{mtype}"].expand(batch_size, 1, self.d_model) 
+                        for mtype in metadata_types]
+            # Add zeros for numerical values
+            # Add unknown tokens for numerical values
+            all_tokens.extend([self.categorical_tokens[f"unknown_{ntype}"].expand(batch_size, 1, self.d_model)
+                            for ntype in numerical_types])
+            return torch.cat(all_tokens, dim=1)
+        
+        all_tokens = []
+        
+        # Process each metadata type
+        for mtype in metadata_types:
+            if mtype in metadata:
+                type_tokens = torch.cat([self.categorical_tokens.get(value, self.categorical_tokens[f"unknown_{mtype}"])
+                    for value in metadata[mtype]], dim=0)
+            else:
+                type_tokens = self.categorical_tokens[f"unknown_{mtype}"].expand(batch_size, 1, self.d_model)
+            
+            all_tokens.append(type_tokens)
+
+        # Process each numerical metadata type
+        for ntype in numerical_types:
+            if ntype in metadata:
+                # Get numerical values and convert to tensor
+                values = metadata[ntype].view(batch_size, 1)
+                
+                # Create a mask for -1 values (treat as unknown)
+                is_unknown = (values == -1)
+                
+                # For non-unknown values, apply linear embedding
+                embedded_values = self.numerical_embeddings[ntype](values)
+                embedded_values = embedded_values.view(batch_size, 1, self.d_model)
+                
+                # Replace embeddings for -1 values with unknown token
+                unknown_token = self.categorical_tokens[f"unknown_{ntype}"].expand(batch_size, 1, self.d_model)
+                embedded_values = torch.where(
+                    is_unknown.unsqueeze(-1).expand(-1, -1, self.d_model),
+                    unknown_token,
+                    embedded_values
+                )
+                
+                all_tokens.append(embedded_values)
+            else:
+                # Use unknown token if missing
+                all_tokens.append(self.categorical_tokens[f"unknown_{ntype}"].expand(batch_size, 1, self.d_model))
+        
+        # Concatenate all token types together
+        return torch.cat(all_tokens, dim=1)
+
+
+    def forward(self, x_enc, x_mark_enc, attn_mask, apply_mask_tokens_fn=None, metadata=None):
         enc_out = self.embed(x_enc, x_mark_enc)
-
+        metadata
         if apply_mask_tokens_fn is not None:
             enc_out, masked_tokens = apply_mask_tokens_fn(x_enc, enc_out)
 
@@ -153,6 +238,15 @@ class EncoderModel(nn.Module):
         # Combine the parts back together
         enc_out = torch.cat(encoded_parts, dim=1)
 
+        # Embed metadata
+        embedded_metadata = self.embed_metadata(metadata, batch_size=x_enc.shape[0])
+        if embedded_metadata is not None:
+            # Append metadata as an additional time step
+            enc_out = torch.cat((enc_out, embedded_metadata), dim=1)
+
+            # Extend the attention mask to match the new enc_out shape
+            num_metadata_tokens = embedded_metadata.shape[1]  # Number of metadata tokens
+            attn_mask._mask = F.pad(attn_mask.mask, (0, num_metadata_tokens, 0, num_metadata_tokens), value=0)
         enc_out, attns = self.encoder(enc_out, attn_mask=attn_mask)
         return enc_out, attns
 
@@ -215,7 +309,7 @@ class Model(nn.Module):
 
         return embedded_tokens, masked_tokens
 
-    def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance=False):
+    def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance=False, metadata=None):
         device = x_enc.device
         attn_mask = NegativeNineMask(x_enc.transpose(1, 2), num_heads=8, device=x_enc.device, completly_remove_missing=False)
         #attn_mask = None
@@ -226,7 +320,7 @@ class Model(nn.Module):
             x_enc /= stdev
 
         _, _, N = x_enc.shape
-        enc_out, attns = self.encoder_model(x_enc, x_mark_enc, attn_mask=attn_mask, apply_mask_tokens_fn=self.apply_mask_tokens)
+        enc_out, attns = self.encoder_model(x_enc, x_mark_enc, attn_mask=attn_mask, apply_mask_tokens_fn=self.apply_mask_tokens, metadata=metadata)
         #enc_out, masked_tokens = self.apply_mask_tokens(x_enc, enc_out, apply_random_tokens=False)
         #masked_tokens = None
         dec_out = self.projector_model(enc_out, N)
@@ -244,13 +338,13 @@ class Model(nn.Module):
         else:
             return dec_out
 
-    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None,return_variance=False):
+    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None,return_variance=False, metadata=None):
         self.iter_count += 1
         if return_variance:
-            dec_out, dec_out_uncertainty = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance=True)
+            dec_out, dec_out_uncertainty = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance=True, metadata=metadata)
             return dec_out[:, -self.pred_len:, :], dec_out_uncertainty
         else:
-            dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance)
+            dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance, metadata=metadata)
             return dec_out[:, -self.pred_len:, :], None
 
     def freeze_encoder(self):
@@ -373,17 +467,28 @@ class Model(nn.Module):
         #    mask = avg_attention_weights_with_nan[0]*avg_attention_weights_with_nan[0].T
         #    mask = np.where(mask == np.nan, np.nan, 1)
         #    #mask = mask.T
+        # Get the original sequence length without metadata tokens
+        orig_seq_len = input_data_with_nan[batch_index].shape[1]
+        
+        # Update this line to only use the first orig_seq_len columns
         plt.subplot(2, 2, 4)
-        #avg_attention_weights[batch_index][non_nan_columns:, :] = np.nan
-        avg_attention_weights[batch_index][:, np.isnan(input_data_with_nan[batch_index]).any(axis=0)] = np.nan
-        plt.imshow(avg_attention_weights[batch_index], cmap='viridis', aspect='auto')  # Visualizing the averaged attention weights of the first batch
+        
+        # Only use the part of attention weights that corresponds to the original sequence
+        # This handles the case where metadata tokens were added
+        attention_visual = avg_attention_weights[batch_index][:orig_seq_len, :orig_seq_len].copy()
+        
+        # Now apply the mask only to the dimensions we're visualizing
+        missing_mask = np.isnan(input_data_with_nan[batch_index]).any(axis=0)
+        attention_visual[:, missing_mask] = np.nan
+        
+        plt.imshow(attention_visual, cmap='viridis', aspect='auto')
         plt.colorbar()
         plt.title('Attention Matrix (Averaged over Heads)')
         plt.xlabel('Key Position')
         plt.ylabel('Query Position')
 
         # Overlay grid lines
-        num_rows, num_cols = avg_attention_weights[batch_index].shape
+        num_rows, num_cols = attention_visual.shape
         plt.xticks(np.arange(-0.5, num_cols, 1), [])
         plt.yticks(np.arange(-0.5, num_rows, 1), [])
         plt.grid(color='black', linestyle='-', linewidth=0.5)

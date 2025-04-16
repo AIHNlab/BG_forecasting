@@ -64,7 +64,7 @@ def random_subsample_feature(sequence, feature_idx, sample_rate):
 class SequenceDataset(Dataset):
     def __init__(self, input_data, input_data_missing_mask, target_data, target_data_missing_mask, 
                  sequence_length, forecast_steps, step, allowed_missing_values_rate, allowed_missing_values_rate_target,
-                 feature_list, target_list, test_target, patch_size, mask_prob, chance_of_smbg, chance_feature_missing):#, mask_ratio, chance_of_feature_missing):
+                 feature_list, target_list, test_target, patch_size, mask_prob, chance_of_smbg, chance_feature_missing, metadata):#, mask_ratio, chance_of_feature_missing):
         
         self.input_data = input_data  # NumPy array
         self.input_data_missing_mask = input_data_missing_mask  # NumPy array
@@ -93,6 +93,20 @@ class SequenceDataset(Dataset):
         self.mask_prob = mask_prob
         self.chance_of_smbg = chance_of_smbg
         self.chance_feature_missing = chance_feature_missing
+        required_metadata = ['diagnosis_type', 'biological_sex', 'device_type', 'age', 'bmi']
+
+        # Define default values by field type
+        default_values = {
+            'diagnosis_type': '-', 'biological_sex': '-', 'device_type': '-', 'age': -1, 'bmi': -1                  # numeric field
+        }
+
+        # Create metadata dictionary with appropriate defaults for missing or None values
+        self.metadata = {}
+        for k in required_metadata:
+            if k in metadata and metadata[k] is not None:
+                self.metadata[k] = metadata[k]
+            else:
+                self.metadata[k] = default_values[k]
         
 
     def _find_valid_indices(self):
@@ -158,8 +172,10 @@ class SequenceDataset(Dataset):
         # reshape to patch_size
         #sequence = self.periodicity_reshape(sequence, self.n_features, 'apply')
         #target = self.periodicity_reshape(target, self.n_features, 'apply')
-        
-        return sequence, target
+        if self.metadata:
+            return sequence, target, self.metadata
+        else:
+            return sequence, target
 
 
 
