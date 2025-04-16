@@ -56,19 +56,40 @@ class DataloaderTidepoolSAP100(Dataloader):
         #test_a71abd4e08ab19da1e090bc24f209bc92ec2b55fb028c1b5d100759b26ce34c1.csv,8/19/15,11/25/19,7/28/18,10/25/18,90,90,1.0,58,58,22.0,22.0,,
         #test_dbcb6083fae7a69dd4475687e85061031aaa1d1d45826676cf2ee504648eef49.csv,7/14/18,11/20/19,8/22/19,11/19/19,90,88,0.977777778,36,36,24.0,24.0,type1,female
     
-    def _standardize_metadata(self,metadata_from_file):
+    def _standardize_metadata(self, metadata_from_file):
+        def safe_int(value):
+            try:
+                return int(value)
+            except (ValueError, TypeError):
+                return None
+
         standardized_metadata = {}
         for patient_id in metadata_from_file.keys():
+            if patient_id == "file_name":
+                continue
             standardized_metadata[patient_id] = {
-                'age_range_low': metadata_from_file[patient_id]['ageStart'],
-                'age_range_high': metadata_from_file[patient_id]['ageEnd'],
-                'biological_sex': metadata_from_file[patient_id]['biologicalSex'],
-                'diagnosis_type': metadata_from_file[patient_id]['diagnosisType'],
-                #'cgm_type': 'medtronic_630g',
-                #'sensor_band': 'empatica_embrace',
-                'years_living_with_diagnosis': metadata_from_file[patient_id]['yearsLivingWithDiabetesStart'],
-                'sampling_rate': 300
+                'age_range_low': safe_int(metadata_from_file[patient_id]['ageStart']),
+                'age_range_high': safe_int(metadata_from_file[patient_id]['ageEnd']),
             }
+
+            # Use average of the two if both are valid, else set age to None
+            low = standardized_metadata[patient_id]['age_range_low']
+            high = standardized_metadata[patient_id]['age_range_high']
+            if low is not None and high is not None:
+                age = (low + high) // 2
+            else:
+                age = None
+
+            standardized_metadata[patient_id].update({
+                'age': age,
+                'biological_sex': metadata_from_file[patient_id].get('biologicalSex'),
+                'diagnosis_type': metadata_from_file[patient_id].get('diagnosisType'),
+                'bmi': None,  # BMI is not provided in the metadata file
+                'device_type': 'open_loop',
+                'years_living_with_diagnosis': safe_int(metadata_from_file[patient_id].get('yearsLivingWithDiabetesStart')),
+                'sampling_rate': 300
+            })
+
         return standardized_metadata
             
         
@@ -293,8 +314,9 @@ class DataloaderTidepoolSAP100(Dataloader):
         #df.to_csv(path_or_buf='mhm/{}_processed.csv'.format(patient_id), index=False)
         if calculate_iob == True:
             df['iob'] = calculate_total_iob(df['bolus'].values, ts_min=5, t_action_max_min=240)
-            df['iob'] = pd.Series(df['iob']).rolling(window=12, min_periods=1).mean().to_numpy()
+            #df['iob'] = pd.Series(df['iob']).rolling(window=12, min_periods=1).mean().to_numpy()
             df['cob'] = calculate_total_cob(df['carbInput'].values, carb_absorption=0.8, ts_min=5, t_action_max_min=240)
-            df['cob'] = pd.Series(df['cob']).rolling(window=12, min_periods=1).mean().to_numpy()
+            #df['cob'] = pd.Series(df['cob']).rolling(window=12, min_periods=1).mean().to_numpy()
+        df['hr'] = np.nan
         return df, patient_id
 

@@ -157,9 +157,9 @@ class DataloaderOhio(Dataloader):
         print(df.head())
         if calculate_iob == True:
             df['iob'] = calculate_total_iob(df['bolus'].values, ts_min=5, t_action_max_min=240)
-            df['iob'] = pd.Series(df['iob']).rolling(window=12, min_periods=1).mean().to_numpy()
+            #df['iob'] = pd.Series(df['iob']).rolling(window=12, min_periods=1).mean().to_numpy()
             df['cob'] = calculate_total_cob(df['carbInput'].values, carb_absorption=0.8, ts_min=5, t_action_max_min=240)
-            df['cob'] = pd.Series(df['cob']).rolling(window=12, min_periods=1).mean().to_numpy()
+            #df['cob'] = pd.Series(df['cob']).rolling(window=12, min_periods=1).mean().to_numpy()
         return df, patient_id
 
     def _get_2020_dict(self):
@@ -167,68 +167,92 @@ class DataloaderOhio(Dataloader):
             '540': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 30,
                 'age_range_low': 20,
                 'age_range_high': 40,
                 'biological_sex': 'male',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_630g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_630g',
                 'sensor_band': 'empatica_embrace',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             },
             '544': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 50,
                 'age_range_low': 40,
                 'age_range_high': 60,
                 'biological_sex': 'male',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_530g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_530g',
                 'sensor_band': 'empatica_embrace',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             },
             '552': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 30,
                 'age_range_low': 20,
                 'age_range_high': 40,
                 'biological_sex': 'male',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_630g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_630g',
                 'sensor_band': 'empatica_embrace',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             },
             '567': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 30,
                 'age_range_low': 20,
                 'age_range_high': 40,
                 'biological_sex': 'female',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_630g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_630g',
                 'sensor_band': 'empatica_embrace',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             },
             '584': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 50,
                 'age_range_low': 40,
                 'age_range_high': 60,
                 'biological_sex': 'male',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_530g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_530g',
                 'sensor_band': 'empatica_embrace',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             },
             '596': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 70,
                 'age_range_low': 60,
                 'age_range_high': 80,
                 'biological_sex': 'male',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_530g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_530g',
                 'sensor_band': 'empatica_embrace',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             }
         }
         return metadata2020
@@ -238,68 +262,92 @@ class DataloaderOhio(Dataloader):
             '559': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 50,
                 'age_range_low': 40,
                 'age_range_high': 60,
                 'biological_sex': 'female',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_530g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_530g',
                 'sensor_band': 'basis_peak',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             },
             '563': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 50,
                 'age_range_low': 40,
                 'age_range_high': 60,
                 'biological_sex': 'male',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_530g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_530g',
                 'sensor_band': 'basis_peak',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             },
             '570': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 50,
                 'age_range_low': 40,
                 'age_range_high': 60,
                 'biological_sex': 'male',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_530g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_530g',
                 'sensor_band': 'basis_peak',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             },
             '575': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 50,
                 'age_range_low': 40,
                 'age_range_high': 60,
                 'biological_sex': 'female',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_530g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_530g',
                 'sensor_band': 'basis_peak',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             },
             '588': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 50,
                 'age_range_low': 40,
                 'age_range_high': 60,
                 'biological_sex': 'female',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_530g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_530g',
                 'sensor_band': 'basis_peak',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             },
             '591': {
                 'number_of_samples': 0,
                 'number_of_cgm_samples': 0,
+                'age': 50,
                 'age_range_low': 40,
                 'age_range_high': 60,
                 'biological_sex': 'female',
                 'diagnosis_type': 'type1',
-                'cgm_type': 'medtronic_530g',
+                'cgm_type': 'medtronic_enlite',
+                "device_type": "open_loop",
+                'device_name': 'medtronic_530g',
                 'sensor_band': 'basis_peak',
-                'sampling_rate': 300
+                'sampling_rate': 300,
+                'bmi': None
             }
         }
         return metadata2018
