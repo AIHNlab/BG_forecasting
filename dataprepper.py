@@ -49,7 +49,9 @@ class DataPrepper:
         #self.missing_mask = self.handle_missing_values(self.feature_list)
         # Initialize Scaler
         self.scaler_x = Scaler(dataframes=dataframes, features=self.feature_list, scaler=scaler_class_x, missing_mask=None, is_input=True, file_path=experiment_path)
-        self.scaler_y = Scaler(dataframes=dataframes, features=self.target_list, scaler=scaler_class_y, missing_mask=None, is_input=False, file_path=experiment_path) 
+        self.scaler_y = Scaler(dataframes=dataframes, features=self.target_list, scaler=scaler_class_y, missing_mask=None, is_input=False, file_path=experiment_path)
+        self.hypoglycemia_threshold = self.scaler_x.transform_single_value(70)
+        self.hyperglycemia_threshold = self.scaler_x.transform_single_value(180)
         self.test_target = test_target
         self.mask_prob = mask_prob
         self.chance_of_smbg = chance_of_smbg

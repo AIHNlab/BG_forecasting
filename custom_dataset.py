@@ -87,6 +87,7 @@ class SequenceDataset(Dataset):
             i += 1
         self.test_target_index = self.column_dict[test_target]
         self.target_indices = [self.column_dict[feature] for feature in target_list]
+        self.non_test_target_indices = [i for i in self.target_indices if i != self.test_target_index]
 
         self.valid_indices = self._find_valid_indices()
         self.patch_size = patch_size
@@ -167,7 +168,10 @@ class SequenceDataset(Dataset):
             sequence[:, feature_mask] = -9
             target[:, feature_mask] = -9
         
-        sequence[-self.forecast_steps:, :] = -6
+        # Set the non-cgm target values to -9 here to not predict covariates
+        sequence[-self.forecast_steps:, :] = -9
+        target[-self.forecast_steps:, self.non_test_target_indices] = -9
+        sequence[-self.forecast_steps:, self.test_target_index] = -6
 
         # reshape to patch_size
         #sequence = self.periodicity_reshape(sequence, self.n_features, 'apply')

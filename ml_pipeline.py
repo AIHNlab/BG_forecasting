@@ -92,7 +92,7 @@ def create_temporal_split(full_dataset, val_ratio=0.05):
     
     return train_indices, val_indices
 
-def train_model(config, full_dataset, fitted_scaler_y):
+def train_model(config, full_dataset, hypoglycemia_threshold, hyperglycemia_threshold):
     
 
     # Get all indices
@@ -109,7 +109,8 @@ def train_model(config, full_dataset, fitted_scaler_y):
 
     train_loader = DataLoader(train_dataset, shuffle=True, batch_size=config['hp_config']['batch_size'])
     val_loader = DataLoader(val_dataset, shuffle=False, batch_size=config['hp_config']['batch_size'])
-    
+    config['hp_config']['hypoglycemia_threshold'] = hypoglycemia_threshold
+    config['hp_config']['hyperglycemia_threshold'] = hyperglycemia_threshold
     # Train the model
     retrain_model = True
     if config['run_config']['parent_model_path'] is not None:
@@ -150,7 +151,7 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
         #test_data = CustomDataset(features_test, target_test, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
         test_loader = DataLoader(testset, shuffle=False, batch_size=config['hp_config']['batch_size'])
         trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth')
-        predictions, actuals, stds = trainer.test(test_loader, scaler=prepper.scaler_x.scaler)
+        predictions, actuals, stds = trainer.test(test_loader, scaler=prepper.scaler_x.scaler, hypoglycemia_threshold=prepper.hypoglycemia_threshold, hyperglycemia_threshold=prepper.hyperglycemia_threshold)
         
         if actuals.size == 0:
             continue
@@ -383,7 +384,7 @@ def main(config, train=True, test=True):
         dataset = prepper.make_features_and_targetpair()
         #prepper = DataPrepper(participants_test, data_handler, feature_list=config['run_config']['features'], data_type="test", forecast_steps=config['run_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'])
         #features_test, target_test = prepper.make_features_and_targetpair()
-        train_model(config, dataset, prepper.scaler_y.scaler)
+        train_model(config, dataset, prepper.hypoglycemia_threshold, prepper.hyperglycemia_threshold)
 
     if config['run_config']['test']:
         if config['run_config']['test_participants'] == 'all':
@@ -436,7 +437,7 @@ if __name__ == "__main__":
     #data_handler.load_data(save_as_csv=True)
     #data_handler = DataHandler("DataloaderTidepoolSAP100", r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data", dataset_name="Tidepool_SAP100")
     #data_handler.load_data(save_as_csv=True)
-    experiment_path = os.path.join('experiments','Demographics')
+    experiment_path = os.path.join('experiments','SanityCheck')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'

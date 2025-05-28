@@ -65,7 +65,7 @@ class PositionalEncoding(nn.Module):
 class NegativeNineMask:
     def __init__(self, x_enc, num_heads, device="cpu",completly_remove_missing=True):
         """
-        Creates a boolean attention mask that masks out tokens where the first value is -9,
+        Creates a boolean attention mask that masks out tokens where all values are -9,
         expanded to match the dimensions expected by the attention scores.
         
         Args:
@@ -76,7 +76,8 @@ class NegativeNineMask:
         """
         # Check if the first value in each token is -9
         batch_size, seq_len, num_tokens = x_enc.shape
-        mask = (x_enc[:, :, 0] == -9).unsqueeze(1).to(device)  # Shape: (B, 1, N)
+        #mask = (x_enc[:, :, 0] == -9).unsqueeze(1).to(device)  # Shape: (B, 1, N)
+        mask = torch.all(x_enc == -9, dim=2).unsqueeze(1).to(device)  # Shape: (B, 1, L)
         if completly_remove_missing:
             mask = mask | mask.transpose(1, 2)  # Logical OR to combine masks, Shape: (B, L, L)
         # Expand the mask to match the expected dimensions [B, H, L, L]
@@ -93,6 +94,16 @@ class ReconstructionHead(nn.Module):
 
     def forward(self, enc_out, N):
         dec_out = self.projector(enc_out).permute(0, 2, 1)[:, :, :N]
+        return dec_out
+    
+class AlarmHead(nn.Module):
+    def __init__(self, d_model, token_index):
+        super(AlarmHead, self).__init__()
+        self.token_index = token_index
+        self.projector = nn.Linear(d_model, 1, bias=True)
+
+    def forward(self, enc_out, N):
+        dec_out = self.projector(enc_out[:, self.token_index])
         return dec_out
     
 class ReconstructionHeadFullMLP(nn.Module):
@@ -225,9 +236,8 @@ class EncoderModel(nn.Module):
 
     def forward(self, x_enc, x_mark_enc, attn_mask, apply_mask_tokens_fn=None, metadata=None):
         enc_out = self.embed(x_enc, x_mark_enc)
-        metadata
         if apply_mask_tokens_fn is not None:
-            enc_out, masked_tokens = apply_mask_tokens_fn(x_enc, enc_out)
+            enc_out = apply_mask_tokens_fn(x_enc, enc_out)
 
         #enc_out = self.positional_encoding(enc_out)
         enc_out_parts = torch.chunk(enc_out, self.n_features, dim=1)  # Split along the second dimension (sequence length)
@@ -263,14 +273,21 @@ class Model(nn.Module):
         #self.missing_token = torch.ones(1, 1, configs.d_model)  # Initialize with ones
         #self.mask_token = torch.zeros(1, 1, configs.d_model)    # Initialize with zeros
         self.encoder_model = EncoderModel(configs)
-        #self.projector_model = ReconstructionHead(configs.d_model, self.pred_len)
-        self.projector_model = ReconstructionHeadFullMLP(configs.d_model, self.pred_len, configs.patch_size, configs.n_features, configs.seq_len)
-        self.projector_model_uncertainty = ReconstructionHeadFullMLP(configs.d_model, self.pred_len, configs.patch_size, configs.n_features, configs.seq_len)
+        self.reconstruction_projector = ReconstructionHead(configs.d_model, self.pred_len)
+        self.variance_projector = ReconstructionHead(configs.d_model, self.pred_len)
+        self.mean_projector = ReconstructionHead(configs.d_model, self.pred_len)
+        self.forecast_projector = ReconstructionHead(configs.d_model, self.pred_len)
+
+        self.hyperglycemia_projector = AlarmHead(configs.d_model, configs.first_forecast_token)
+        self.hypoglycemia_projector = AlarmHead(configs.d_model, configs.first_forecast_token)
+
+        #self.projector_model = ReconstructionHeadFullMLP(configs.d_model, self.pred_len, configs.patch_size, configs.n_features, configs.seq_len)
+        #self.projector_model_uncertainty = ReconstructionHeadFullMLP(configs.d_model, self.pred_len, configs.patch_size, configs.n_features, configs.seq_len)
         self.tb_writer = None
         self.iter_count = 0
 
     # Should set the embedded token to self.mask_token if the first value of the input is -9
-    def apply_mask_tokens(self, input, embedded_tokens, apply_random_tokens=False):
+    def apply_mask_tokens(self, input, embedded_tokens):
         """
         Replaces the embedded tokens with self.mask_token where:
         - first value is -9 (missing values)
@@ -284,8 +301,8 @@ class Model(nn.Module):
             torch.Tensor: The masked embedded tokens of shape (Batch, Variate, d_model).
         """
         device = embedded_tokens.device
-        self.missing_token = self.missing_token.to(device)
-        self.mask_token = self.mask_token.to(device)
+        self.missing_token = self.missing_token#.to(device)
+        self.mask_token = self.mask_token#.to(device)
 
         # Create mask for tokens where first value is -6
         random_token_mask = (input[:, 0, :] == -6)  # Shape: (Batch, Variate)
@@ -293,13 +310,15 @@ class Model(nn.Module):
         random_token_mask = random_token_mask.expand(-1, -1, embedded_tokens.size(-1))  # Shape: (Batch, Variate, d_model)
 
         # Create a mask where the first value is -9 for each Variate
-        mask = (input[:, 0, :] == -9)  # Shape: (Batch, Variate)
+        #mask = (input[:, 0, :] == -9)  # Shape: (Batch, Variate)
+        # create a mask if all of the the values in the token is -9
+        mask = torch.all(input == -9, dim=1)
         mask = mask.unsqueeze(-1)      # Shape: (Batch, Variate, 1)
         mask = mask.expand(-1, -1, embedded_tokens.size(-1))  # Shape: (Batch, Variate, d_model)
 
         # Combine the masks
-        combined_mask = random_token_mask & ~mask
-        masked_tokens = combined_mask[:,:,1]
+        #combined_mask = random_token_mask & ~mask
+        #masked_tokens = combined_mask[:,:,1]
 
         # Replace embedded tokens with mask_token where random_token_mask is True
         embedded_tokens = torch.where(random_token_mask, self.mask_token, embedded_tokens)
@@ -307,7 +326,7 @@ class Model(nn.Module):
         # Replace embedded tokens with missing_token where mask is True
         embedded_tokens = torch.where(mask, self.missing_token, embedded_tokens)
 
-        return embedded_tokens, masked_tokens
+        return embedded_tokens
 
     def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance=False, metadata=None):
         device = x_enc.device
@@ -321,31 +340,36 @@ class Model(nn.Module):
 
         _, _, N = x_enc.shape
         enc_out, attns = self.encoder_model(x_enc, x_mark_enc, attn_mask=attn_mask, apply_mask_tokens_fn=self.apply_mask_tokens, metadata=metadata)
+        with torch.no_grad():
+            detached_enc_out = enc_out.detach()
         #enc_out, masked_tokens = self.apply_mask_tokens(x_enc, enc_out, apply_random_tokens=False)
         #masked_tokens = None
-        dec_out = self.projector_model(enc_out, N)
-        if return_variance:
-            dec_out_uncertainty = self.projector_model_uncertainty(enc_out, N)
+        dec_out_reconstruction = self.reconstruction_projector(enc_out, N)
+        dec_out_forecast = self.forecast_projector(detached_enc_out, N)
+        dec_out_mean = self.mean_projector(detached_enc_out, N)
+        dec_out_variance = self.variance_projector(detached_enc_out, N)
+        dec_out_hyperglycemia = self.hyperglycemia_projector(detached_enc_out, N)
+        dec_out_hypoglycemia = self.hypoglycemia_projector(detached_enc_out, N)
 
         if self.use_norm:
-            dec_out = dec_out * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
-            dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
+            dec_out_reconstruction = dec_out_reconstruction * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
+            dec_out_reconstruction = dec_out_reconstruction + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
+            dec_out_forecast = dec_out_forecast * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
+            dec_out_forecast = dec_out_forecast + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
+            dec_out_mean = dec_out_mean * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
+            dec_out_mean = dec_out_mean + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
+            dec_out_variance = dec_out_variance * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
+            dec_out_variance = dec_out_variance + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
         #if random.randint(1, 100) == 1:
         if self.iter_count % 5000 == 0:
-            self.plot_attention(x_enc, enc_out, attns, dec_out)
-        if return_variance:
-            return dec_out, dec_out_uncertainty
-        else:
-            return dec_out
+            self.plot_attention(x_enc, enc_out, attns, dec_out_reconstruction)
+        return dec_out_reconstruction, dec_out_forecast, dec_out_mean, dec_out_variance, dec_out_hyperglycemia, dec_out_hypoglycemia
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None,return_variance=False, metadata=None):
         self.iter_count += 1
-        if return_variance:
-            dec_out, dec_out_uncertainty = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance=True, metadata=metadata)
-            return dec_out[:, -self.pred_len:, :], dec_out_uncertainty
-        else:
-            dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance, metadata=metadata)
-            return dec_out[:, -self.pred_len:, :], None
+        #dec_out, dec_out_uncertainty = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance=True, metadata=metadata)
+        #return dec_out[:, -self.pred_len:, :], dec_out_uncertainty
+        return self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec, return_variance=True, metadata=metadata) 
 
     def freeze_encoder(self):
         for param in self.encoder_model.parameters():
@@ -353,20 +377,11 @@ class Model(nn.Module):
 
     def plot_attention(self, x_enc, enc_out, attns, dec_out):
         found = False
-        #for i in range(x_enc.shape[0]):
-        #    batch = masked_tokens[i]
-        #    for j in range(batch.shape[0]):
-        #        if batch[j]:
-        #            batch_index = i
-        #            token = j
-        #            found = True
-        #            break
-        #    if found:
-        #        break
+
         if not found:
             print("No masked tokens found")
             batch_index = 0
-            token = 0
+            token = 95
         # Convert tensors to numpy arrays
         x_enc_np = x_enc.detach().cpu().numpy()
         enc_out_np = enc_out.detach().cpu().numpy()
@@ -382,16 +397,7 @@ class Model(nn.Module):
         # Average the attention weights over all heads
         avg_attention_weights = np.mean(attention_matrix, axis=1)  # Averaging over the heads dimension
 
-        # Ensure the dimensions align for matrix multiplication
-        # Transpose input_data to match the dimensions
-        #input_data_transposed = np.transpose(input_data[0], (1, 0))
 
-        #attention_weights = avg_attention_weights[0, 0][:, np.newaxis]  # Shape: (L_k, 1)
-        #input_data_sample = input_data[0]                               # Shape: (L_k, N)
-
-        # Element-wise multiplication
-        #attention_applied = attention_weights * input_data_sample.T       # Shape: (L_k, N)
-        #attention_applied = attention_applied.T
         input_data_with_nan = np.where(input_data == -9, np.nan, input_data)
         input_data_cleaned= np.where(input_data_with_nan == -6, np.nan, input_data)
         # Now plot all in subplots
@@ -399,7 +405,7 @@ class Model(nn.Module):
         # Determine the common color scale range
         #vmin = np.nanmin(input_data_with_nan)
         #vmax = np.nanmax(input_data_with_nan)
-        dec_out_np[batch_index][:, np.isnan(input_data_with_nan[batch_index]).any(axis=0)] = np.nan
+        dec_out_np[batch_index][:, np.isnan(input_data_with_nan[batch_index]).all(axis=0)] = np.nan
         vmin = min(
             np.nanquantile(dec_out_np[batch_index], 0.05),
             np.nanquantile(input_data_cleaned[batch_index], 0.05)
@@ -417,7 +423,7 @@ class Model(nn.Module):
         plt.ylabel('Feature Dimension')
 
         # Count the number of non-NaN columns
-        non_nan_columns = np.sum(~np.isnan(input_data_with_nan[batch_index]).any(axis=0))
+        non_nan_columns = np.sum(~np.isnan(input_data_with_nan[batch_index]).all(axis=0))
 
 
         if False:

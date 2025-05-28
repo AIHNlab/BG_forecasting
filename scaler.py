@@ -55,3 +55,70 @@ class Scaler:
     def load_scaler(self, scaler_filename):
         self.scaler = joblib.load(scaler_filename)
     
+    def transform_single_value(self, value, feature_index=0):
+        """
+        Transform a single value using this scaler.
+        
+        Args:
+            value (float): The raw value to scale
+            feature_index (int): Index of the feature to use (default 0 for first feature)
+                                Or can be a string with the feature name
+                
+        Returns:
+            float: The scaled value
+        """
+        if self.scaler is None:
+            return value
+            
+        # Handle feature name instead of index
+        if isinstance(feature_index, str):
+            if feature_index in self.features:
+                feature_index = self.features.index(feature_index)
+            else:
+                raise ValueError(f"Feature '{feature_index}' not found in scaler features")
+        
+        # Create a dummy array with the shape the scaler expects
+        dummy_array = np.zeros((1, len(self.features)))
+        
+        # Set only the value we want to transform
+        dummy_array[0, feature_index] = value
+        
+        # Transform and extract just the value we need
+        transformed_array = self.scaler.transform(dummy_array)
+        scaled_value = transformed_array[0, feature_index]
+        
+        return scaled_value
+    
+    def inverse_transform_single_value(self, scaled_value, feature_index=0):
+        """
+        Inverse transform a scaled value back to the original scale.
+        
+        Args:
+            scaled_value (float): The scaled value to convert back
+            feature_index (int): Index of the feature to use (default 0 for first feature)
+                               Or can be a string with the feature name
+                
+        Returns:
+            float: The original value
+        """
+        if self.scaler is None:
+            return scaled_value
+            
+        # Handle feature name instead of index
+        if isinstance(feature_index, str):
+            if feature_index in self.features:
+                feature_index = self.features.index(feature_index)
+            else:
+                raise ValueError(f"Feature '{feature_index}' not found in scaler features")
+        
+        # Create a dummy array with the shape the scaler expects
+        dummy_array = np.zeros((1, len(self.features)))
+        
+        # Set only the value we want to inverse transform
+        dummy_array[0, feature_index] = scaled_value
+        
+        # Inverse transform and extract just the value we need
+        original_array = self.scaler.inverse_transform(dummy_array)
+        original_value = original_array[0, feature_index]
+        
+        return original_value

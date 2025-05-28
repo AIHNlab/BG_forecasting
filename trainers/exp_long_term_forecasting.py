@@ -286,11 +286,16 @@ class Args:
         #self.target_root_path = './data/electricity/'
         #self.target_data_path = 'electricity.csv'
         self.efficient_training = False
-        self.use_norm = False#True
+        self.use_norm = False
         self.partial_start_index = 0
         self.patch_size = hp_config['patch_size']
         self.mask_ratio = hp_config['mask_ratio']
-
+        self.first_forecast_token = hp_config['feature_window']//hp_config['patch_size'] - hp_config['forecast_steps']//hp_config['patch_size']
+        self.forecast_tokens = []
+        for i in range(self.first_forecast_token, self.first_forecast_token + hp_config['forecast_steps']//hp_config['patch_size']):
+            self.forecast_tokens.append(i)
+        self.hypoglycemia_threshold = hp_config['hypoglycemia_threshold']
+        self.hyperglycemia_threshold = hp_config['hyperglycemia_threshold']
         if self.use_gpu and self.use_multi_gpu:
             self.devices = self.devices.replace(' ', '')
             device_ids = self.devices.split(',')
@@ -370,7 +375,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         criterion = nn.MSELoss()
         return criterion
     
-    def calculate_loss(self, outputs, batch_x, batch_y, outputs_var=None, tb_writer=None, iter_count=None):
+    def calculate_reconstruction_loss(self, outputs, batch_x, batch_y, outputs_var=None, tb_writer=None, iter_count=None):
         """
         Calculates the loss using either MSE or GaussianNLLLoss depending on whether variance predictions are provided.
         
@@ -416,15 +421,21 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         if iter_count is not None and iter_count % 5000 == 0:  # Plotting condition
             # Plotting
             batch_index = 15  # Select the first batch for visualization
-            # Replace -8 and -9 with NaN
+            # Suppose batch_y has shape (Batch, Time, Variate)
+            mask = ((batch_y == -8) | (batch_y == -9) | (batch_y == -6))  # shape: (Batch, Time, Variate)
+            all_mask = torch.all(mask, dim=1, keepdim=True)  # shape: (Batch, Time, 1)
             batch_y = batch_y.clone()
-            batch_y[(batch_y == -8) | (batch_y == -9) | (batch_y == -6)] = np.nan
+            batch_y[all_mask.expand_as(batch_y)] = np.nan
 
             batch_x = batch_x.clone()
-            batch_x[(batch_x == -8) | (batch_x == -9) | (batch_x == -6)] = np.nan
+            mask_x = ((batch_x == -8) | (batch_x == -9) | (batch_x == -6))
+            all_mask_x = torch.all(mask_x, dim=1, keepdim=True)
+            batch_x[all_mask_x.expand_as(batch_x)] = np.nan
 
             outputs = outputs.clone()
-            outputs[(outputs == -8) | (outputs == -9) | (outputs == -6)] = np.nan
+            mask_out = ((outputs == -8) | (outputs == -9) | (outputs == -6))
+            all_mask_out = torch.all(mask_out, dim=1, keepdim=True)
+            outputs[all_mask_out.expand_as(outputs)] = np.nan
             # Determine the color scale limits using masks to ignore NaN values
             vmin = min(
                 torch.quantile(batch_x[~torch.isnan(batch_x)], 0.05).item(),
@@ -477,8 +488,52 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 tb_writer.add_image('Outputs', image, iter_count)
         return masked_loss
 
-    def calculate_test_target_loss(self, outputs, batch_y, test_target, forecast_steps=0):
-        loss = self.criterion(outputs[:,-forecast_steps:,test_target], batch_y[:,-forecast_steps:,test_target])
+    def calculate_forecast_loss(self, outputs, batch_y, test_target, forecast_steps=0, outputs_var=None):
+        forecast_tokens = self.args.forecast_tokens  # This contains indices like [94, 95]
+        
+        # Select only the forecast tokens along the last dimension
+        outputs_forecasts = outputs[:, :, forecast_tokens]  # Shape: [batch, token_size, num_forecast_tokens]
+        batch_y_forecasts = batch_y[:, :, forecast_tokens]  # Shape: [batch, token_size, num_forecast_tokens]
+        
+        if outputs_var is not None:
+            outputs_var_forecasts = outputs_var[:, :, forecast_tokens]  # Shape: [batch, token_size, num_forecast_tokens]
+        
+        # If we need to focus on a specific test_target feature
+        #if test_target is not None:
+        #    # Select the specific feature from the middle dimension
+        #    outputs_forecasts = outputs_forecasts[:, test_target, :]  # Shape: [batch, num_forecast_tokens]
+        #    batch_y_forecasts = batch_y_forecasts[:, test_target, :]  # Shape: [batch, num_forecast_tokens]
+        #    if outputs_var is not None:
+        #        outputs_var_forecasts = outputs_var_forecasts[:, test_target, :]
+        
+        # Create a mask for valid values (not -8 or -9)
+        valid_mask = ((batch_y_forecasts != -8) & (batch_y_forecasts != -9)).float()
+        
+        # Calculate loss with or without variance
+        if outputs_var is None:
+            # Use standard MSE/MAE loss
+            loss = self.criterion_non_reduced(outputs_forecasts, batch_y_forecasts)
+        else:
+            # Use GaussianNLL loss with variance prediction
+            # Ensure variance is positive
+            outputs_var_forecasts = torch.clamp(outputs_var_forecasts, min=1e-6)
+            loss = self.criterion_uncertainty(outputs_forecasts, batch_y_forecasts, outputs_var_forecasts)
+        
+        # Apply mask and normalize by the number of valid values
+        masked_loss = loss * valid_mask
+        if valid_mask.sum() == 0:
+            return torch.zeros(1, requires_grad=True, device=outputs.device)
+        else:
+            return masked_loss.sum() / (valid_mask.sum() + 1e-6)
+
+    def calculate_alarm_loss(self, outputs, batch_y, alarm_type):
+        if alarm_type == 'hypoglycemia':
+            targets = torch.mean((batch_y[:,:12,[self.args.first_forecast_token]] < self.args.hypoglycemia_threshold).float(),axis=1) # Shape: [batch, target]
+        elif alarm_type == 'hyperglycemia':
+            targets = torch.mean((batch_y[:,:12,[self.args.first_forecast_token]] > self.args.hyperglycemia_threshold).float(),axis=1)
+        else:
+            raise ValueError("Invalid alarm type. Use 'hypoglycemia' or 'hyperglycemia'.")
+        loss = nn.BCEWithLogitsLoss()(outputs, targets)
         return loss
 
     def calculate_loss_prev(self, outputs, batch_x, batch_y, masked_tokens=None):
@@ -557,13 +612,16 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         pass
 
 
-    def vali(self, vali_data, vali_loader, tb_writer=None):
-        total_loss = []
-        total_loss_targets = []
+    def vali(self, vali_data, vali_loader, tb_writer=None, step=None):
+        total_recon_loss = []
+        total_forecast_loss = []
+        total_forecast_with_uncertainty_loss = []
+        total_hyperglycemia_loss = []
+        total_hypoglycemia_loss = []
+
         self.model.eval()
         with torch.no_grad():
             batch_x_mark, batch_y_mark = None, None
-            #for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(vali_loader):
             for i, (batch_x, batch_y, metadata) in enumerate(vali_loader):
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
@@ -577,32 +635,46 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 else:
                     batch_x_mark = batch_x_mark.float().to(self.device)
                     batch_y_mark = batch_y_mark.float().to(self.device)
+
                 batch_x = self.periodicity_reshape(batch_x, self.args.n_features, 'apply')
                 batch_y = self.periodicity_reshape(batch_y, self.args.n_features, 'apply')
-                # decoder input
+
                 dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
                 dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
-                # encoder - decoder
-                if self.args.use_amp:
-                    with torch.cuda.amp.autocast():
-                        if self.args.output_attention:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                        else:
-                            outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
-                else:
-                    #if self.args.output_attention:
-                    #    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
-                    #else:
-                    outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True, metadata=metadata)
-                loss = self.calculate_loss(outputs, batch_x, batch_y, outputs_var=outputs_var, tb_writer=tb_writer)
-                #loss_target = self.calculate_test_target_loss(outputs, batch_y, vali_loader.dataset.test_target_index, forecast_steps=self.args.forecast_steps)
-                loss_target = self.calculate_test_target_loss(outputs, batch_y, 0, forecast_steps=self.args.forecast_steps)
-                total_loss.append(loss.item())
-                total_loss_targets.append(loss_target.item())
-        total_loss = np.average(total_loss)
-        total_loss_targets = np.average(total_loss_targets)
+
+                reconstruction, forecast, mean, variance, hyperglycemia, hypoglycemia = self.model(
+                    batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True, metadata=metadata
+                )
+
+                recon_loss = self.calculate_reconstruction_loss(reconstruction, batch_x, batch_y, outputs_var=None)
+                forecast_loss = self.calculate_forecast_loss(forecast, batch_y, 0)
+                forecast_with_uncertainty_loss = self.calculate_forecast_loss(mean, batch_y, 0, outputs_var=variance)
+                hyper_loss = self.calculate_alarm_loss(hyperglycemia, batch_y, 'hyperglycemia')
+                hypo_loss = self.calculate_alarm_loss(hypoglycemia, batch_y, 'hypoglycemia')
+
+                total_recon_loss.append(recon_loss.item())
+                total_forecast_loss.append(forecast_loss.item())
+                total_forecast_with_uncertainty_loss.append(forecast_with_uncertainty_loss.item())
+                total_hyperglycemia_loss.append(hyper_loss.item())
+                total_hypoglycemia_loss.append(hypo_loss.item())
+
+                #if tb_writer is not None and step is not None:
+                #    step = i
+                #    tb_writer.add_scalar('Val/reconstruction_loss', recon_loss.item(), step)
+                #    tb_writer.add_scalar('Val/forecast_loss', forecast_loss.item(), step)
+                #    tb_writer.add_scalar('Val/forecast_with_uncertainty_loss', forecast_with_uncertainty_loss.item(), step)
+                #    tb_writer.add_scalar('Val/hyperglycemia_loss', hyper_loss.item(), step)
+                #    tb_writer.add_scalar('Val/hypoglycemia_loss', hypo_loss.item(), step)
+
         self.model.train()
-        return total_loss, total_loss_targets
+
+        return (
+            np.mean(total_recon_loss),
+            np.mean(total_forecast_loss),
+            np.mean(total_forecast_with_uncertainty_loss),
+            np.mean(total_hyperglycemia_loss),
+            np.mean(total_hypoglycemia_loss)
+        )
 
     def train(self, train_loader, vali_loader, return_variance=True):
         #train_data, train_loader = self._get_data(flag='train')
@@ -624,7 +696,31 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         train_steps = len(train_loader)
         early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
-        model_optim = self._select_optimizer()
+        # Create optimizers per module
+        self.optimizers = {
+            "encoder": torch.optim.Adam(
+                list(self.model.encoder_model.parameters()) +
+                list(self.model.reconstruction_projector.parameters()),
+                lr=self.args.learning_rate, weight_decay=self.args.weight_decay
+            ),
+            "forecast": torch.optim.Adam(self.model.forecast_projector.parameters(), lr=self.args.learning_rate),
+            "mean": torch.optim.Adam(self.model.mean_projector.parameters(), lr=self.args.learning_rate),
+            "variance": torch.optim.Adam(self.model.variance_projector.parameters(), lr=self.args.learning_rate),
+            "hyper": torch.optim.Adam(self.model.hyperglycemia_projector.parameters(), lr=self.args.learning_rate),
+            "hypo": torch.optim.Adam(self.model.hypoglycemia_projector.parameters(), lr=self.args.learning_rate),
+        }
+        self.schedulers = {}
+        for name, optim in self.optimizers.items():
+            total_lr_intervals = (train_steps * self.args.train_epochs) // self.args.lr_update_interval
+            self.schedulers[name] = CosineAnnealingWarmupRestarts(
+                optim,
+                first_cycle_steps=int(total_lr_intervals*0.2),#(len(train_loader) * self.args.train_epochs) // self.args.lr_update_interval,
+                cycle_mult=1,
+                max_lr=self.args.learning_rate,
+                min_lr=1e-7,
+                warmup_steps=int(0.03 * total_lr_intervals),
+                gamma=1.0
+            )
 
         if self.retrain_model == False:
             self.model.load_state_dict(torch.load(self.model_path))
@@ -632,7 +728,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 self.model.freeze_encoder()
             print('Model loaded from:', self.model_path)
             # Validate baseline performance of the model
-            vali_loss, _ = self.vali(vali_data, vali_loader)
+            #vali_loss, _ = self.vali(vali_data, vali_loader)
+            vali_loss, _, _, _, _ = self.vali(vali_data, vali_loader)
             early_stopping(vali_loss, self.model, path)
             if early_stopping.early_stop:
                 print("Early stopping")
@@ -645,7 +742,12 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         for epoch in range(self.args.train_epochs):
             iter_count = 0
             train_loss = []
-            train_loss_targets = []
+            forecast_losses = []
+            recon_losses = []
+            forecast_det_losses = []
+            forecast_uncert_losses = []
+            hyper_losses = []
+            hypo_losses = []
 
             self.model.train()
             epoch_time = time.time()
@@ -655,7 +757,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             for i, (batch_x, batch_y, metadata) in enumerate(train_loader):
                 iter_count += 1
                 total_iters += 1
-                model_optim.zero_grad()
+                #model_optim.zero_grad()
                 batch_x = batch_x.float().to(self.device)
                 batch_y = batch_y.float().to(self.device)
                 for k, v in metadata.items():
@@ -687,14 +789,23 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 #else:
                 #    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)
                 # If doing masked autoencoding
-                outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=return_variance, metadata=metadata)
+                reconstruction, forecast, mean, variance, hyperglycemia, hypoglycemia = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=return_variance, metadata=metadata)
 
-                loss = self.calculate_loss(outputs, batch_x, batch_y, outputs_var=outputs_var,tb_writer=writer, iter_count=total_iters)
+                loss = self.calculate_reconstruction_loss(reconstruction, batch_x, batch_y, outputs_var=None,tb_writer=writer, iter_count=total_iters)
                 #train_loss_target = self.calculate_test_target_loss(outputs, batch_y, train_loader.dataset.test_target_index, forecast_steps=self.args.forecast_steps)
-                train_loss_target = self.calculate_test_target_loss(outputs, batch_y, 0, forecast_steps=self.args.forecast_steps)
+                forecast_loss = self.calculate_forecast_loss(forecast, batch_y, 0)
+                forecast_with_uncertainty_loss = self.calculate_forecast_loss(mean, batch_y, 0, outputs_var=variance)
+                
+                hyperglycemia_loss = self.calculate_alarm_loss(hyperglycemia, batch_y, 'hyperglycemia')
+                hypoglycemia_loss = self.calculate_alarm_loss(hypoglycemia, batch_y, 'hypoglycemia')
 
                 train_loss.append(loss.item())
-                train_loss_targets.append(train_loss_target.item())
+                forecast_losses.append(forecast_loss.item())
+                recon_losses.append(loss.item())
+                forecast_det_losses.append(forecast_loss.item())
+                forecast_uncert_losses.append(forecast_with_uncertainty_loss.item())
+                hyper_losses.append(hyperglycemia_loss.item())
+                hypo_losses.append(hypoglycemia_loss.item())
 
                 if (i + 1) % 100 == 0:
                     print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
@@ -704,39 +815,60 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     
                     iter_count = 0
                     time_now = time.time()
-                    writer.add_scalar('Loss/train_iters', loss.item(), epoch * train_steps + i)
-                    writer.add_scalar('Loss/train_target_iters', train_loss_target.item(), epoch * train_steps + i)
+
+                    step_idx = epoch * train_steps + i
+                    writer.add_scalar('Loss/train_iters_reconstruction', loss.item(), step_idx)
+                    writer.add_scalar('Loss/train_iters_forecast_deterministic', forecast_loss.item(), step_idx)
+                    writer.add_scalar('Loss/train_iters_forecast_uncertainty', forecast_with_uncertainty_loss.item(), step_idx)
+                    writer.add_scalar('Loss/train_iters_hyperglycemia', hyperglycemia_loss.item(), step_idx)
+                    writer.add_scalar('Loss/train_iters_hypoglycemia', hypoglycemia_loss.item(), step_idx)
                 
                 if total_iters % self.args.lr_update_interval == 0:
-
-                    vali_loss, vali_loss_target = self.vali(vali_data, vali_loader)
+                    step_idx = epoch * train_steps + i
+                    vali_loss, vali_loss_target, vali_loss_target_uncertainty, vali_hyper_loss, vali_hypo_loss = self.vali(vali_data, vali_loader, tb_writer=writer, step=step_idx)
                     print("\titers: {0}, epoch: {1} | val_loss: {2:.7f}".format(i + 1, epoch + 1, vali_loss))
                     time_now = time.time()
 
                     #vali_loss = self.vali(vali_data, vali_loader, criterion)
                     writer.add_scalar('Loss/val_iters', vali_loss, epoch * train_steps + i)
                     writer.add_scalar('Loss/val_target_iters', vali_loss_target, epoch * train_steps + i)
-                    lr_intervals += 1
-                    lr = adjust_learning_rate(model_optim, lr_intervals, self.args, train_steps)
-                    writer.add_scalar('LearningRate', lr, epoch * train_steps + i)
 
-                if self.args.use_amp:
-                    scaler.scale(loss).backward()
-                    scaler.step(model_optim)
-                    scaler.update()
-                else:
-                    loss.backward()
-                    model_optim.step()
+                    writer.add_scalar('Val/reconstruction_loss', vali_loss, epoch * train_steps + i)
+                    writer.add_scalar('Val/forecast_loss', vali_loss_target,  epoch * train_steps + i)
+                    writer.add_scalar('Val/forecast_with_uncertainty_loss', vali_loss_target_uncertainty,  epoch * train_steps + i)
+                    writer.add_scalar('Val/hyperglycemia_loss', vali_hyper_loss,  epoch * train_steps + i)
+                    writer.add_scalar('Val/hypoglycemia_loss', vali_hypo_loss,  epoch * train_steps + i)
+                    lr_intervals += 1
+                    for name, scheduler in self.schedulers.items():
+                        scheduler.step(lr_intervals)
+                    # Optional: log LR from encoder as a proxy
+                    encoder_lr = self.optimizers["encoder"].param_groups[0]['lr']
+                    writer.add_scalar('LearningRate', encoder_lr, epoch * train_steps + i)
+                    #writer.add_scalar('LearningRate', lr, epoch * train_steps + i)
+
+                for opt in self.optimizers.values():
+                    opt.zero_grad()
+                loss.backward(retain_graph=True)  # for encoder and reconstruction
+                forecast_loss.backward(retain_graph=True)
+                forecast_with_uncertainty_loss.backward(retain_graph=True)
+                hyperglycemia_loss.backward(retain_graph=True)
+                hypoglycemia_loss.backward(retain_graph=True)
+                for opt in self.optimizers.values():
+                    opt.step()
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
             train_loss = np.average(train_loss)
-            train_loss_targets = np.average(train_loss_targets)
+            forecast_losses = np.average(forecast_losses)
             #writer.add_scalar('Loss/train', loss.item(), epoch * len(train_loader) + i)
-            writer.add_scalar('Loss/train', train_loss, epoch)
-            writer.add_scalar('Loss/train_target', train_loss_targets, epoch)
-            vali_loss, vali_loss_target = self.vali(vali_data, vali_loader)
-            writer.add_scalar('Loss/val', vali_loss, epoch)
-            writer.add_scalar('Loss/val_target', vali_loss_target, epoch)
+            #writer.add_scalar('Loss/train', train_loss, epoch)
+            #writer.add_scalar('Loss/train_target', forecast_losses, epoch)
+            vali_loss, vali_loss_target, vali_loss_target_uncertainty, vali_hyper_loss, vali_hypo_loss = self.vali(vali_data, vali_loader, tb_writer=writer)
+
+            #writer.add_scalar('Loss/val', vali_loss, epoch)
+            #writer.add_scalar('Loss/val_target', vali_loss_target, epoch)
+            #writer.add_scalar('Loss/val_target_uncertainty', vali_loss_target_uncertainty, epoch)
+            #writer.add_scalar('Loss/val_hyperglycemia', vali_hyper_loss, epoch)
+            #writer.add_scalar('Loss/val_hypoglycemia', vali_hypo_loss, epoch)
             #test_loss = self.vali(test_data, test_loader, criterion)
 
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
@@ -755,7 +887,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         writer.close()
         return self.model
 
-    def test(self, test_loader, test=1, scaler=None):
+    def test(self, test_loader, test=1, scaler=None, hypoglycemia_threshold=70, hyperglycemia_threshold=180):
         ii = 0
         #test_data, test_loader = self._get_data(flag='test')
         if test:
@@ -802,7 +934,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                         outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True, metadata=metadata)
                 else:
                     #if self.args.output_attention:
-                    outputs, outputs_var = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True, metadata=metadata)
+                    reconstruction, outputs, mean, outputs_var, hyperglycemia, hypoglycemia = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True, metadata=metadata)
+                    #reconstruction, forecast, mean, variance, hyperglycemia, hypoglycemia = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True, metadata=metadata)
 
                 f_dim = -1 if self.args.features == 'MS' else 0
 
