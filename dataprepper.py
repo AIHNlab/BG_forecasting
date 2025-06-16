@@ -10,7 +10,7 @@ class DataPrepper:
                  forecast_steps=24, scaler_class_x = None, scaler_class_y = None, sequence_length = 25, patch_size=288,
                  feature_list = ['cbg', 'basal', 'carbInput', 'bolus'], target_list = ['cbg'],
                  step = 1, allowed_missing_values_rate = [0.5,1.0,1.0], allowed_missing_values_rate_target = [0.0,1.0,1.0], fill_types=None, experiment_path=None, history_of_days=0,
-                 test_target="cbg", mask_prob=0.0, chance_of_smbg=0.0, chance_feature_missing=0.0, metadata=None, rolling_mean_window=None):
+                 test_target="cbg", mask_prob=0.0, chance_of_smbg=0.0, chance_feature_missing=0.0, metadata=None, rolling_mean_window=None, mask_future_target_covariates=False, disabled_covariates=[0,1,1], context_limit=48):
 
         self.participants = participants
 
@@ -48,6 +48,15 @@ class DataPrepper:
             self.fill_types = fill_types
         #self.missing_mask = self.handle_missing_values(self.feature_list)
         # Initialize Scaler
+        # Replace 0s with np.nan in all dataframes for features and targets
+        for participant, df in self.dataframes.items():
+            for feature in self.feature_list:
+                if feature in df.columns:
+                    df[feature].replace(0, np.nan, inplace=True)
+            for target in self.target_list:
+                if target in df.columns:
+                    df[target].replace(0, np.nan, inplace=True)
+                    
         self.scaler_x = Scaler(dataframes=dataframes, features=self.feature_list, scaler=scaler_class_x, missing_mask=None, is_input=True, file_path=experiment_path)
         self.scaler_y = Scaler(dataframes=dataframes, features=self.target_list, scaler=scaler_class_y, missing_mask=None, is_input=False, file_path=experiment_path)
         self.hypoglycemia_threshold = self.scaler_x.transform_single_value(70)
@@ -57,6 +66,9 @@ class DataPrepper:
         self.chance_of_smbg = chance_of_smbg
         self.chance_feature_missing = chance_feature_missing
         self.rolling_mean_window = rolling_mean_window
+        self.mask_future_target_covariates = mask_future_target_covariates
+        self.disabled_covariates = disabled_covariates
+        self.context_limit = context_limit
     #@profile
     def make_features_and_targetpair(self):
         participant_datasets = []
@@ -101,7 +113,12 @@ class DataPrepper:
                     mask_prob=self.mask_prob,
                     chance_of_smbg=self.chance_of_smbg,
                     chance_feature_missing=self.chance_feature_missing,
-                    metadata=self.metadata[participant]
+                    metadata=self.metadata[participant],
+                    mask_future_target_covariates=self.mask_future_target_covariates,
+                    disabled_covariates=self.disabled_covariates,
+                    context_limit=self.context_limit
+                    #hypo_threshold= self.hypoglycemia_threshold,
+                    #hyper_threshold=self.hyperglycemia_threshold,
                 )
                 participant_datasets.append(dataset)
 
