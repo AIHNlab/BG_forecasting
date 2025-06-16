@@ -170,6 +170,8 @@ class EncoderModel(nn.Module):
             # unknown numerical values
             "unknown_age": nn.Parameter(torch.randn(1, 1, configs.d_model)),
             "unknown_bmi": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "hypoglycemia_token": nn.Parameter(torch.randn(1, 1, configs.d_model)),
+            "hyperglycemia_token": nn.Parameter(torch.randn(1, 1, configs.d_model)),
         })
 
         self.numerical_embeddings = nn.ModuleDict({
@@ -253,9 +255,13 @@ class EncoderModel(nn.Module):
         if embedded_metadata is not None:
             # Append metadata as an additional time step
             enc_out = torch.cat((enc_out, embedded_metadata), dim=1)
+            # Add hypo/hyperglycemia tokens
+            hypo_token = self.categorical_tokens["hypoglycemia_token"].expand(enc_out.shape[0], 1, self.d_model)
+            hyper_token = self.categorical_tokens["hyperglycemia_token"].expand(enc_out.shape[0], 1, self.d_model)
+            enc_out = torch.cat((enc_out, hypo_token, hyper_token), dim=1)
 
             # Extend the attention mask to match the new enc_out shape
-            num_metadata_tokens = embedded_metadata.shape[1]  # Number of metadata tokens
+            num_metadata_tokens = embedded_metadata.shape[1] + 2  # +2 for the new tokens
             attn_mask._mask = F.pad(attn_mask.mask, (0, num_metadata_tokens, 0, num_metadata_tokens), value=0)
         enc_out, attns = self.encoder(enc_out, attn_mask=attn_mask)
         return enc_out, attns
@@ -278,8 +284,8 @@ class Model(nn.Module):
         self.mean_projector = ReconstructionHead(configs.d_model, self.pred_len)
         self.forecast_projector = ReconstructionHead(configs.d_model, self.pred_len)
 
-        self.hyperglycemia_projector = AlarmHead(configs.d_model, configs.first_forecast_token)
-        self.hypoglycemia_projector = AlarmHead(configs.d_model, configs.first_forecast_token)
+        self.hyperglycemia_projector = AlarmHead(configs.d_model, -1)
+        self.hypoglycemia_projector = AlarmHead(configs.d_model, -2)
 
         #self.projector_model = ReconstructionHeadFullMLP(configs.d_model, self.pred_len, configs.patch_size, configs.n_features, configs.seq_len)
         #self.projector_model_uncertainty = ReconstructionHeadFullMLP(configs.d_model, self.pred_len, configs.patch_size, configs.n_features, configs.seq_len)
@@ -344,12 +350,12 @@ class Model(nn.Module):
             detached_enc_out = enc_out.detach()
         #enc_out, masked_tokens = self.apply_mask_tokens(x_enc, enc_out, apply_random_tokens=False)
         #masked_tokens = None
-        dec_out_reconstruction = self.reconstruction_projector(enc_out, N)
-        dec_out_forecast = self.forecast_projector(detached_enc_out, N)
+        dec_out_reconstruction = self.reconstruction_projector(detached_enc_out, N)
+        dec_out_forecast = self.forecast_projector(enc_out, N)
         dec_out_mean = self.mean_projector(detached_enc_out, N)
         dec_out_variance = self.variance_projector(detached_enc_out, N)
-        dec_out_hyperglycemia = self.hyperglycemia_projector(detached_enc_out, N)
-        dec_out_hypoglycemia = self.hypoglycemia_projector(detached_enc_out, N)
+        dec_out_hyperglycemia = self.hyperglycemia_projector(enc_out, N)
+        dec_out_hypoglycemia = self.hypoglycemia_projector(enc_out, N)
 
         if self.use_norm:
             dec_out_reconstruction = dec_out_reconstruction * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
