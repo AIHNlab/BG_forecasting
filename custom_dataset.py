@@ -1,5 +1,5 @@
 import torch
-from torch.utils.data import TensorDataset, DataLoader, Dataset
+from torch.utils.data import TensorDataset, DataLoader, Dataset, Sampler
 import numpy as np
 import random
 
@@ -64,7 +64,8 @@ def random_subsample_feature(sequence, feature_idx, sample_rate):
 class SequenceDataset(Dataset):
     def __init__(self, input_data, input_data_missing_mask, target_data, target_data_missing_mask, 
                  sequence_length, forecast_steps, step, allowed_missing_values_rate, allowed_missing_values_rate_target,
-                 feature_list, target_list, test_target, patch_size, mask_prob, chance_of_smbg, chance_feature_missing, metadata):#, mask_ratio, chance_of_feature_missing):
+                 feature_list, target_list, test_target, patch_size, mask_prob, chance_of_smbg, chance_feature_missing, metadata,
+                 mask_future_target_covariates=True, disabled_covariates=None, context_limit=None):#, mask_ratio, chance_of_feature_missing):
         
         self.input_data = input_data  # NumPy array
         self.input_data_missing_mask = input_data_missing_mask  # NumPy array
@@ -95,6 +96,9 @@ class SequenceDataset(Dataset):
         self.chance_of_smbg = chance_of_smbg
         self.chance_feature_missing = chance_feature_missing
         required_metadata = ['diagnosis_type', 'biological_sex', 'device_type', 'age', 'bmi']
+        self.mask_future_target_covariates = mask_future_target_covariates
+        self.disabled_covariates = disabled_covariates
+        self.context_limit = context_limit 
 
         # Define default values by field type
         default_values = {
@@ -168,10 +172,24 @@ class SequenceDataset(Dataset):
             sequence[:, feature_mask] = -9
             target[:, feature_mask] = -9
         
+        # Set disabled covariates to -9
+        if not self.disabled_covariates:
+            for i, disabled in enumerate(self.disabled_covariates):
+                if disabled == 1 and i < sequence.shape[1]:
+                    sequence[:, i] = -9
+                    target[:, i] = -9
+        
         # Set the non-cgm target values to -9 here to not predict covariates
         sequence[-self.forecast_steps:, :] = -9
-        target[-self.forecast_steps:, self.non_test_target_indices] = -9
+        if self.mask_future_target_covariates:
+            target[-self.forecast_steps:, self.non_test_target_indices] = -9
         sequence[-self.forecast_steps:, self.test_target_index] = -6
+
+        if self.context_limit is not None and self.context_limit > 0:
+            keep_steps = self.forecast_steps + self.context_limit
+            if sequence.shape[0] > keep_steps:
+                sequence[:-keep_steps, :] = -9
+                target[:-keep_steps, :] = -9       
 
         # reshape to patch_size
         #sequence = self.periodicity_reshape(sequence, self.n_features, 'apply')
@@ -180,6 +198,53 @@ class SequenceDataset(Dataset):
             return sequence, target, self.metadata
         else:
             return sequence, target
+
+class EventBalancedSampler(Sampler):
+    def __init__(self, dataset, batch_size, threshold_low=70, threshold_high=180):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.threshold_low = threshold_low
+        self.threshold_high = threshold_high
+
+        # Precompute class indices
+        self.hypo_indices = []
+        self.hyper_indices = []
+        self.nonevent_indices = []
+
+        MISSING_VALUES = {-9, -8}
+
+        for idx in range(len(dataset)):
+            _, target, *_ = dataset[idx]  # target shape: [seq_len, num_features]
+            cgm = target[-24:, 0]  # assumes this index exists
+            valid = ~torch.isin(cgm, torch.tensor(list(MISSING_VALUES)))
+            cgm_valid = cgm[valid]
+
+            if len(cgm_valid) == 0:
+                self.nonevent_indices.append(idx)
+                continue
+
+            if (cgm_valid < self.threshold_low).float().mean() > 0.25:
+                self.hypo_indices.append(idx)
+            elif (cgm_valid > self.threshold_high).float().mean() > 0.25:
+                self.hyper_indices.append(idx)
+            else:
+                self.nonevent_indices.append(idx)
+
+        self.min_class_size = min(len(self.hypo_indices), len(self.hyper_indices), len(self.nonevent_indices))
+
+    def __iter__(self):
+        n_each = self.batch_size // 3
+        total_batches = self.min_class_size // n_each
+
+        for _ in range(total_batches):
+            batch = random.sample(self.hypo_indices, n_each) + \
+                    random.sample(self.hyper_indices, n_each) + \
+                    random.sample(self.nonevent_indices, self.batch_size - 2 * n_each)
+            random.shuffle(batch)
+            yield from batch
+
+    def __len__(self):
+        return self.min_class_size // (self.batch_size // 3) * self.batch_size
 
 
 
