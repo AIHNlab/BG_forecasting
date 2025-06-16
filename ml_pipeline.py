@@ -23,7 +23,9 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 import json
 import numpy as np
 import shutil
-from custom_dataset import CustomDataset
+from custom_dataset import CustomDataset, EventBalancedSampler
+from alarm_evaluation import run_evaluation
+from forecast_evaluation import plot_and_evaluate_horizon, evaluate_cg_ega_horizon, evaluate_uncertainty_calibration, create_calibration_analysis
 
 #def evaluate_model(hp_config,features_test, target_test, model_path):
 #
@@ -106,8 +108,11 @@ def train_model(config, full_dataset, hypoglycemia_threshold, hyperglycemia_thre
     from torch.utils.data import Subset
     train_dataset = Subset(full_dataset, train_indices)
     val_dataset = Subset(full_dataset, val_indices)
-
-    train_loader = DataLoader(train_dataset, shuffle=True, batch_size=config['hp_config']['batch_size'])
+    if False:
+        train_sampler = EventBalancedSampler(train_dataset, batch_size=config['hp_config']['batch_size'], threshold_low=hypoglycemia_threshold, threshold_high=hyperglycemia_threshold)
+        train_loader = DataLoader(train_dataset, batch_size=config['hp_config']['batch_size'], sampler=train_sampler)
+    else:
+        train_loader = DataLoader(train_dataset, shuffle=True, batch_size=config['hp_config']['batch_size'])
     val_loader = DataLoader(val_dataset, shuffle=False, batch_size=config['hp_config']['batch_size'])
     config['hp_config']['hypoglycemia_threshold'] = hypoglycemia_threshold
     config['hp_config']['hyperglycemia_threshold'] = hyperglycemia_threshold
@@ -121,8 +126,20 @@ def train_model(config, full_dataset, hypoglycemia_threshold, hyperglycemia_thre
 def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participants, metadata):
     plot_data = {horizon: [] for horizon in config['hp_config']['forecast_horizons']}
     rmses = {horizon: [] for horizon in config['hp_config']['forecast_horizons']}
-    rmse_df = pd.DataFrame(columns=['Participant'] + [f'RMSE_{horizon}' for horizon in config['hp_config']['forecast_horizons']])
+    cg_ega_metrics = {horizon: [] for horizon in config['hp_config']['forecast_horizons']}
+    rmse_df = pd.DataFrame(
+        columns=['Participant'] +
+        [f'RMSE_{h}' for h in config['hp_config']['forecast_horizons']] +
+        [f'RMSE_hypo_{h}' for h in config['hp_config']['forecast_horizons']] +
+        [f'RMSE_hyper_{h}' for h in config['hp_config']['forecast_horizons']] +
+        [f'RMSE_normo_{h}' for h in config['hp_config']['forecast_horizons']]
+    )
+    cg_ega_df = pd.DataFrame(columns=['Participant', 'Horizon', 'AP', 'BE', 'EP'])
     forecast_horizons = config['hp_config']['forecast_horizons']
+    event_metrics_all = []
+    mse_errors = []
+    mae_errors = []
+    calibration_summary = []
     #i=0
     for participant in participants:
         #i+=1
@@ -146,70 +163,232 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
                               chance_of_smbg=config['hp_config']['chance_of_smbg'],
                               chance_feature_missing=config['hp_config']['chance_feature_missing'],
                               metadata=metadata,
+                              mask_future_target_covariates=False,
+                              disabled_covariates=config['run_config']['disabled_covariates'],
+                              context_limit=config['hp_config']['context_limit']
                               )
         testset = prepper.make_features_and_targetpair()
         #test_data = CustomDataset(features_test, target_test, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
         test_loader = DataLoader(testset, shuffle=False, batch_size=config['hp_config']['batch_size'])
         trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth')
-        predictions, actuals, stds = trainer.test(test_loader, scaler=prepper.scaler_x.scaler, hypoglycemia_threshold=prepper.hypoglycemia_threshold, hyperglycemia_threshold=prepper.hyperglycemia_threshold)
+        predictions, actuals, means, stds, hyper_probs, hypo_probs = trainer.test(test_loader, scaler=prepper.scaler_x.scaler, hypoglycemia_threshold=prepper.hypoglycemia_threshold, hyperglycemia_threshold=prepper.hyperglycemia_threshold)
         
         if actuals.size == 0:
             continue
+
+        actuals_original = np.array(actuals)
         
         rmse_values = {'Participant': participant}
         if config['hp_config']['forecast_steps'] > 1:
             predictions = np.array(predictions)[:, -config['hp_config']['forecast_steps']:, prepper.test_target_index]
             actuals = np.array(actuals)[:, -config['hp_config']['forecast_steps']:, prepper.test_target_index]
-            stds = np.array(stds)[:, -config['hp_config']['forecast_steps']:, prepper.test_target_index]  # Add this line
-            
+            stds = np.array(stds)[:, -config['hp_config']['forecast_steps']:, prepper.test_target_index] 
+            means = np.array(means)[:, -config['hp_config']['forecast_steps']:, prepper.test_target_index]
+
+        mse_errors.append(np.mean((actuals[:,:12] - predictions[:,:12])**2, axis=(1)))
+        mae_errors.append(np.mean(np.abs(actuals[:,:12] - predictions[:,:12]), axis=(1)))
+
+        # Run evaluation for multiple thresholds
+        thresholds = [0.20, 0.35, 0.5, 0.65, 0.80]
+        for threshold in thresholds:
+            event_metrics = run_evaluation(actuals, hyper_probs, hypo_probs, participant, config, threshold=threshold)
+            if event_metrics is not None:
+                # Add threshold info to the metrics
+                event_metrics['threshold'] = threshold
+                event_metrics_all.append(event_metrics)
+        if event_metrics is not None:
+            event_metrics_all.append(event_metrics)
+
         for horizon in forecast_horizons:
             pred_horizon = np.array(predictions)[:, horizon-1].flatten()
             actual_horizon = np.array(actuals)[:, horizon-1].flatten()
-            std_horizon = np.array(stds)[:, horizon-1].flatten()  # Add this line
+            std_horizon = np.array(stds)[:, horizon-1].flatten()
+            mean_horizon = np.array(means)[:, horizon-1].flatten()
             
-            plot_data[horizon].append((pred_horizon, actual_horizon, std_horizon))  # Modified to include std
-            
-            # Save plot to a file with confidence intervals
-            evaluation_path = os.path.dirname(__file__)+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant), f'horizon_{horizon}')
-            os.makedirs(evaluation_path, exist_ok=True)
-            fig = plt.figure(figsize=(25, 5))
-            
-            # Plot actual values and predictions
-            plt.plot(actual_horizon, label='Actuals', linestyle='-', linewidth=2, color='blue', alpha=0.7)
-            plt.plot(pred_horizon, label='Predictions', linestyle='--', linewidth=1, color='red', alpha=0.7)
-            
-            # Add confidence intervals (±2 standard deviations for 95% confidence)
-            plt.fill_between(
-                range(len(pred_horizon)),
-                pred_horizon - 2 * std_horizon,
-                pred_horizon + 2 * std_horizon,
-                color='red',
-                alpha=0.2,
-                label='95% Confidence Interval'
-            )
-            
-            plt.legend()
-            plt.title(f'Participant {participant} - Horizon {horizon}')
-            plt.savefig(os.path.join(evaluation_path, 'plot.png'))
-            plt.close(fig)
-            #plt.show()
+            if True:
+                # NOW USE ORIGINAL DATA FOR MASKING
+                nan_mask = np.isnan(actual_horizon)
+                window = config['run_config'].get('required_samples_window', 24)
+                
+                # Get required samples for each input channel from config
+                required_samples = config['run_config'].get('required_samples_during_test', [24, 1, 1])
+                
+                nan_window_mask = np.zeros_like(nan_mask, dtype=bool)
+                
+                for i in range(window, len(nan_mask)):
+                    # Check input channel requirements using ORIGINAL multi-channel data
+                    should_mask = False
+                    
+                    if i < len(actuals_original):
+                        window_start = max(0, i - window)
+                        window_actuals = actuals_original[window_start:i]  # Shape: [window_size, forecast_steps, channels]
+                        
+                        # Check requirements for each input channel
+                        for channel_idx, required_count in enumerate(required_samples):
+                            if channel_idx < window_actuals.shape[2]:  # Check if channel exists
+                                # Count valid samples for this channel across the window
+                                # Take the corresponding forecast step (horizon-1) for this channel
+                                if horizon-1 < window_actuals.shape[1]:
+                                    channel_data = window_actuals[:, horizon-1, channel_idx]  # [window_size]
+                                    valid_count = np.sum(~np.isnan(channel_data))
+                                    
+                                    if valid_count < required_count:
+                                        should_mask = True
+                                        break
+                    
+                    nan_window_mask[i] = should_mask
+                
+                final_mask = nan_mask | nan_window_mask
+            else:
+                # Filter the arrays using the mask
+                nan_mask = np.isnan(actual_horizon)
+                window = 24
+                nan_window_mask = np.zeros_like(nan_mask, dtype=bool)
+                for i in range(window, len(nan_mask)):
+                    if np.any(nan_mask[i-window:i]):
+                        nan_window_mask[i] = True
+                final_mask = nan_mask | nan_window_mask
 
-            # Filter the arrays using the mask
-            mask = ~np.isnan(actual_horizon)
-            filtered_pred_horizon = pred_horizon[mask]
-            filtered_actual_horizon = actual_horizon[mask]            
-            rmse = np.sqrt(np.mean((filtered_pred_horizon - filtered_actual_horizon) ** 2))
+            pred_horizon[final_mask] = np.nan
+            mean_horizon[final_mask] = np.nan
+            #actual_horizon[final_mask] = np.nan
+            std_horizon[final_mask] = np.nan
+            plot_data[horizon].append((pred_horizon, actual_horizon, std_horizon))
+            rmse = plot_and_evaluate_horizon(pred_horizon, actual_horizon, std_horizon, participant, horizon, config)
             rmses[horizon].append(rmse)
-            rmse_values[f'RMSE_{horizon}'] = rmse
-        
+            
+            # Store all RMSEs for this horizon in the summary - use explicit np.nan for missing values
+            rmse_values[f'RMSE_{horizon}'] = rmse["rmse"] if not pd.isna(rmse["rmse"]) else np.nan
+            rmse_values[f'RMSE_hypo_{horizon}'] = rmse["rmse_hypo"] if not pd.isna(rmse["rmse_hypo"]) else np.nan
+            rmse_values[f'RMSE_hyper_{horizon}'] = rmse["rmse_hyper"] if not pd.isna(rmse["rmse_hyper"]) else np.nan  
+            rmse_values[f'RMSE_normo_{horizon}'] = rmse["rmse_normo"] if not pd.isna(rmse["rmse_normo"]) else np.nan
+
+            # --- CG-EGA per horizon ---
+            ap, be, ep = evaluate_cg_ega_horizon(
+                pred_horizon, actual_horizon, participant, horizon, config, freq=5, plot_day=1
+            )
+            cg_ega_metrics[horizon].append((ap, be, ep))
+            cg_ega_df = pd.concat([
+                cg_ega_df,
+                pd.DataFrame([{
+                    'Participant': participant,
+                    'Horizon': horizon,
+                    'AP': ap,
+                    'BE': be,
+                    'EP': ep
+                }])
+            ], ignore_index=True)
+            # Apply same masking as RMSE eval
+            valid_mask = ~np.isnan(pred_horizon) & ~np.isnan(actual_horizon) & ~np.isnan(std_horizon) & ~np.isnan(mean_horizon)
+            if valid_mask.sum() > 0:
+                calibration_result = evaluate_uncertainty_calibration(
+                    y_true=actual_horizon[valid_mask],
+                    mu=mean_horizon[valid_mask],
+                    sigma=std_horizon[valid_mask],
+                    participant=participant,
+                    horizon=horizon,
+                    config=config,
+                    plot=True
+                )
+
+                print(f"Participant {participant} | Horizon {horizon} | PICE: {calibration_result['PICE']:.4f}")
+
+                row = {
+                    'Participant': participant,
+                    'Horizon': horizon,
+                    'PICE': calibration_result['PICE']
+                }
+
+                for alpha, picp, err in zip(
+                    calibration_result['confidence_levels'],
+                    calibration_result['picp'],
+                    calibration_result['calibration_error_per_level']
+                ):
+                    level = int(alpha * 100)
+                    row[f'PICP_{level}'] = picp
+                    row[f'CALERR_{level}'] = err
+
+                calibration_summary.append(row)
         # Append the RMSE values to the summary DataFrame
         rmse_df = pd.concat([rmse_df, pd.DataFrame([rmse_values])], ignore_index=True)
     
     #plot_results(participants, plot_data, config)
     rmse_df.to_csv(os.path.dirname(__file__)+os.sep+os.path.join(config['run_config']['experiment_path'], 'evaluation', 'rmse_summary.csv'), index=False)
-    plot_per_horizon(forecast_horizons, plot_data, participants, config)
+    cg_ega_df.to_csv(os.path.dirname(__file__)+os.sep+os.path.join(config['run_config']['experiment_path'], 'evaluation', 'cg_ega_summary.csv'), index=False)
+    if False:
+        plot_per_horizon(forecast_horizons, plot_data, participants, config)
     # Save the summary of all RMSEs to a CSV file
+    # Apply NaN masking and calculate aggregate metrics
+    all_mse, all_mae = np.concatenate(mse_errors), np.concatenate(mae_errors)
     
+    # Create extended NaN mask (24 steps after each NaN)
+    nan_mask = np.isnan(all_mse)
+    extended_mask = np.zeros_like(nan_mask, dtype=bool)
+    for i in range(len(nan_mask)):
+        if nan_mask[i]:
+            extended_mask[i:min(i+25, len(nan_mask))] = True
+    
+    # Apply mask and print results
+    all_mse[extended_mask] = np.nan
+    all_mae[extended_mask] = np.nan
+    
+    median_mae = np.nanmedian(all_mae)
+    median_mse = np.nanmedian(all_mse)
+    
+    print("Median MAE: ", median_mae)
+    print("Median MSE: ", median_mse)
+    
+    # Save aggregate stats to file
+    aggregate_stats = {
+        'median_mae': float(median_mae),
+        'median_mse': float(median_mse),
+        'mean_mae': float(np.nanmean(all_mae)),
+        'mean_mse': float(np.nanmean(all_mse)),
+        'std_mae': float(np.nanstd(all_mae)),
+        'std_mse': float(np.nanstd(all_mse)),
+        'rmse': float(np.sqrt(median_mse)),
+        'total_samples': int(np.sum(~np.isnan(all_mae))),
+        'masked_samples': int(np.sum(np.isnan(all_mae)))
+    }
+    
+    # Save as JSON
+    evaluation_path = os.path.dirname(__file__) + os.sep + os.path.join(config['run_config']['experiment_path'], 'evaluation')
+    os.makedirs(evaluation_path, exist_ok=True)
+    
+    with open(os.path.join(evaluation_path, 'aggregate_metrics.json'), 'w') as f:
+        json.dump(aggregate_stats, f, indent=4)
+    if event_metrics_all:
+        # Flatten metrics into rows
+        rows = []
+        for entry in event_metrics_all:
+            pid = entry['participant']
+            threshold = entry.get('threshold', 'default')  # Get threshold or use 'default'
+            for condition, metrics in entry.items():
+                if condition in ['participant', 'threshold']:
+                    continue
+                row = {'Participant': pid, 'Threshold': threshold, 'Condition': condition}
+                row.update(metrics)
+                rows.append(row)
+
+        event_df = pd.DataFrame(rows)
+        event_df.to_csv(os.path.dirname(__file__)+os.sep+os.path.join(config['run_config']['experiment_path'], 'evaluation', 'event_level_summary_multi_threshold.csv'), index=False)
+        
+        # Compute and save summary stats grouped by threshold and condition
+        summary_stats = event_df.drop(columns=['Participant']).groupby(['Threshold', 'Condition']).agg(['mean', 'std']).transpose()
+        summary_stats.to_csv(os.path.dirname(__file__)+os.sep+os.path.join(config['run_config']['experiment_path'], 'evaluation', 'event_level_summary_stats_multi_threshold.csv'))
+        # Save calibration summary
+        pd.DataFrame(calibration_summary).to_csv(os.path.join(evaluation_path, 'calibration_summary.csv'), index=False)
+        # Compute and save calibration summary stats
+        if calibration_summary:
+            calibration_df = pd.DataFrame(calibration_summary)
+            
+            # Create and save calibration statistics and plots
+            create_calibration_analysis(calibration_df, evaluation_path, config)
+
+        print("\n=== Aggregated Event-Level Metrics (Multi-Threshold) ===")
+        print(summary_stats)
+
+
 
 def evaluate_model_glucobench(config, dataframes):
     mse_errors = []
@@ -437,7 +616,7 @@ if __name__ == "__main__":
     #data_handler.load_data(save_as_csv=True)
     #data_handler = DataHandler("DataloaderTidepoolSAP100", r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data", dataset_name="Tidepool_SAP100")
     #data_handler.load_data(save_as_csv=True)
-    experiment_path = os.path.join('experiments','SanityCheck')
+    experiment_path = os.path.join('experiments','CGMBolusCHO')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'
