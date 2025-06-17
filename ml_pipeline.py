@@ -214,6 +214,7 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
                 required_samples = config['run_config'].get('required_samples_during_test', [24, 1, 1])
                 
                 nan_window_mask = np.zeros_like(nan_mask, dtype=bool)
+                nan_window_mask[:window] = True
                 
                 for i in range(window, len(nan_mask)):
                     # Check input channel requirements using ORIGINAL multi-channel data
