@@ -18,11 +18,43 @@ class DataloaderGlucobench(Dataloader):
             self.reverse_data_mapping = {v: k for k, v in self.data_mapping.items() if v is not None}
             self.metadata_mapping = {"age": "age","biological_sex": "gender", "bmi": "BMI", "diagonosis_type": "T2DM", "insulin_treatment": None}
             self.reverse_metadata_mapping = {v: k for k, v in self.metadata_mapping.items() if v is not None}
+        if "iglu" in self.directory_path:
+            self.id_column = "id"
+            self.data_mapping =  {"5minute_intervals_timestamp": "time", "cbg": "gl", "basal": None, "bolus": None, "hr": None, "carbInput": None}
+            self.reverse_data_mapping = {v: k for k, v in self.data_mapping.items() if v is not None}
+            self.metadata_mapping = {"age": None,"biological_sex": None, "bmi": None, "diagonosis_type": None, "insulin_treatment": None}
+            self.reverse_metadata_mapping = {v: k for k, v in self.metadata_mapping.items() if v is not None}
+        if "hall" in self.directory_path:
+            self.id_column = "id"
+            self.data_mapping =  {"5minute_intervals_timestamp": "time", "cbg": "gl", "basal": None, "bolus": None, "hr": None, "carbInput": None}
+            self.reverse_data_mapping = {v: k for k, v in self.data_mapping.items() if v is not None}
+            #self.metadata_mapping = {"age": "mage","biological_sex": None, "bmi": "BMI", "diagonosis_type": "glucotype", "insulin_treatment": None}
+            self.metadata_mapping = {"age": "Age","biological_sex": None, "bmi": "BMI", "diagonosis_type": "diagnosis", "insulin_treatment": None}
+            self.reverse_metadata_mapping = {v: k for k, v in self.metadata_mapping.items() if v is not None}
+        if "dubosson" in self.directory_path:
+            self.id_column = "id"
+            self.data_mapping =  {"5minute_intervals_timestamp": "time", "cbg": "gl", "basal": None, "bolus": None, "hr": "HR", "carbInput": None}
+            self.reverse_data_mapping = {v: k for k, v in self.data_mapping.items() if v is not None}
+            #self.metadata_mapping = {"age": "mage","biological_sex": None, "bmi": "BMI", "diagonosis_type": "glucotype", "insulin_treatment": None}
+            self.metadata_mapping = {"age": None,"biological_sex": None, "bmi": None, "diagonosis_type": None, "insulin_treatment": None}
+            self.reverse_metadata_mapping = {v: k for k, v in self.metadata_mapping.items() if v is not None}
+            self.ignore_list = [3.0,9.0]
+        if "weinstock" in self.directory_path:
+            self.id_column = "id"
+            self.data_mapping =  {"5minute_intervals_timestamp": "time", "cbg": "gl", "basal": None, "bolus": None, "hr": None, "carbInput": None}
+            self.reverse_data_mapping = {v: k for k, v in self.data_mapping.items() if v is not None}
+            #self.metadata_mapping = {"age": "mage","biological_sex": None, "bmi": "BMI", "diagonosis_type": "glucotype", "insulin_treatment": None}
+            self.metadata_mapping = {"age": None,"biological_sex": "Gender", "bmi": None, "diagonosis_type": "Type I diabetes mellitus", "insulin_treatment": None}
+            self.reverse_metadata_mapping = {v: k for k, v in self.metadata_mapping.items() if v is not None}
 
 
     def load_data(self):
         df = pd.read_csv(self.directory_path + ".csv")
         df = df.rename(columns=self.reverse_data_mapping)
+        
+        if hasattr(self, 'ignore_list'):
+            df = df[~df[self.id_column].isin(self.ignore_list)]
+        
         for col_name, mapped_name in self.data_mapping.items():
             if mapped_name is None:
                 df[col_name] = np.nan
@@ -46,6 +78,8 @@ class DataloaderGlucobench(Dataloader):
     def _get_dataset_specific_metadata(self):
         df = pd.read_csv(self.directory_path + ".csv")
         df = df.rename(columns=self.reverse_metadata_mapping)
+        if hasattr(self, 'ignore_list'):
+            df = df[~df[self.id_column].isin(self.ignore_list)]
         unique_patients = df[self.id_column].unique()
         n_patients = len(unique_patients)
         test_size = int(0.1 * n_patients)
@@ -57,15 +91,29 @@ class DataloaderGlucobench(Dataloader):
         if "colas" in self.directory_path:
             df['diagonosis_type'] = df['diagonosis_type'].map({True: 'type2', False: "normal"})
             df['biological_sex'] = df['biological_sex'].map({1: 'female', 0: 'male', 2: 'unknown_biological_sex'})
+        if "iglu" in self.directory_path:
+            df['diagonosis_type'] = "type2"
+        if "hall" in self.directory_path:
+            df['diagonosis_type'] = df['diagonosis_type'].map({2: 'type2', 0: "normal", 1: "prediabetes"})
+        if "dubosson" in self.directory_path:
+            df['diagonosis_type'] = "type1"
+        if "weinstock" in self.directory_path:
+            print("Diagnosis type counts before mapping:")
+            print(df['diagonosis_type'].value_counts())
+            df['diagonosis_type'] = df['diagonosis_type'].map({1: 'type1', 0: "normal"})
+            df['biological_sex'] = df['biological_sex'].map({"F": 'female', "M": 'male'})
+            df["bmi"] = df["Weight"] * 703 / (df["Height"] ** 2)
 
         for patient_id, group in df.groupby(self.id_column):
             if patient_id in train_patients:
-                self.train_metadata[patient_id] = group.to_dict(orient='records')[0]
+                self.train_metadata[str(patient_id)] = group.to_dict(orient='records')[0]
                 #print(self.train_metadata[patient_id])
             else:
-                self.test_metadata[patient_id] = group.to_dict(orient='records')[0]
+                self.test_metadata[str(patient_id)] = group.to_dict(orient='records')[0]
                 #print(self.test_metadata[patient_id])
         #print(self.train_metadata)
+        #print("______________________________")
+        #print(self.test_metadata)
 
     def _get_dataframe(self, file, calculate_iob = True):
         pass
