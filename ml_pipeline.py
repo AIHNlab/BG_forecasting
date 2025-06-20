@@ -188,6 +188,18 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
         mse_errors.append(np.mean((actuals[:,:12] - predictions[:,:12])**2, axis=(1)))
         mae_errors.append(np.mean(np.abs(actuals[:,:12] - predictions[:,:12]), axis=(1)))
 
+        # Save participant metadata
+        evaluation_path = os.path.dirname(__file__) + os.sep + os.path.join(config['run_config']['experiment_path'], 'evaluation')
+        os.makedirs(evaluation_path, exist_ok=True)
+        
+        if participant in metadata:
+            participant_metadata = metadata[participant]
+            metadata_filename = f'metadata_participant_{participant}.json'
+            participant_path = os.path.join(evaluation_path, str(participant))
+            os.makedirs(participant_path, exist_ok=True)
+            with open(os.path.join(participant_path, metadata_filename), 'w') as f:
+                json.dump(participant_metadata, f, indent=4)
+
         # Run evaluation for multiple thresholds
         thresholds = [0.20, 0.35, 0.5, 0.65, 0.80]
         for threshold in thresholds:
