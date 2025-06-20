@@ -16,6 +16,9 @@ class DataloaderTidepoolHCL150(Dataloader):
         train_path = os.path.join(self.directory_path, "Tidepool-JDRF-HCL150-train", "train-data")
         train_files = glob(train_path + os.sep + "*.csv")
         for file in tqdm(train_files):
+            if not os.path.isfile(file):
+                print(f"Missing train file: {file}")
+                continue
             df, patient_id = self._get_dataframe(file)
             self.train_dataframes[patient_id] = df 
             self.all_dataframes[patient_id] = df
@@ -24,6 +27,9 @@ class DataloaderTidepoolHCL150(Dataloader):
         test_files = glob(test_path + os.sep + "*.csv")
 
         for file in tqdm(test_files):
+            if not os.path.isfile(file):
+                print(f"Missing test file: {file}")
+                continue
             df, patient_id = self._get_dataframe(file)
             self.test_dataframes[patient_id] = df 
             self.all_dataframes[patient_id] = df
@@ -85,7 +91,7 @@ class DataloaderTidepoolHCL150(Dataloader):
                 'biological_sex': metadata_from_file[patient_id].get('biologicalSex'),
                 'diagnosis_type': metadata_from_file[patient_id].get('diagnosisType'),
                 'bmi': None,  # BMI is not provided in the metadata file
-                'device_type': 'open_loop',
+                'device_type': 'closed_loop',
                 'years_living_with_diagnosis': safe_int(metadata_from_file[patient_id].get('yearsLivingWithDiabetesStart')),
                 'sampling_rate': 300
             })
@@ -122,10 +128,10 @@ class DataloaderTidepoolHCL150(Dataloader):
         patient_id = file.split(os.sep)[-1].split('.')[0]
         print(patient_id)
         read_data_raw = pd.read_csv(file,
-                                    usecols=['carbInput',  # carbohydrate input at pump calculation
+                                    usecols=[#'carbInput',  # carbohydrate input at pump calculation
                                             'deliveryType',  # if scheduled basal rate is active or suspended
-                                            'insulinCarbRatio',  # insulinCarbRatio at pump calculation
-                                            'insulinOnBoard',  # IOB at pump calculation
+                                            #'insulinCarbRatio',  # insulinCarbRatio at pump calculation
+                                            #'insulinOnBoard',  # IOB at pump calculation
                                             'normal',  # amount of bolus insulin
                                             'rate',  # active basal rate (check "deliveryType" for timesteps where basal rate is suspended
                                             'time',  # time of event
@@ -136,9 +142,9 @@ class DataloaderTidepoolHCL150(Dataloader):
         raw_time = read_data_raw['time'].values
         raw_type = read_data_raw['type'].values
         raw_value = read_data_raw['value'].values
-        raw_carbInput = read_data_raw['carbInput'].values
-        raw_insulinCarbRatio = read_data_raw['insulinCarbRatio'].values
-        raw_insulinOnBoard = read_data_raw['insulinOnBoard'].values
+        #raw_carbInput = read_data_raw['carbInput'].values
+        #raw_insulinCarbRatio = read_data_raw['insulinCarbRatio'].values
+        #raw_insulinOnBoard = read_data_raw['insulinOnBoard'].values
         raw_normal = read_data_raw['normal'].values
         raw_deliveryType = read_data_raw['deliveryType'].values
         raw_rate = read_data_raw['rate'].values
@@ -247,62 +253,62 @@ class DataloaderTidepoolHCL150(Dataloader):
         # process carbInput
         carbInput_time = []
         carbInput_value = []
-        for i in range(len(raw_time)):
-            if not np.isnan(raw_carbInput[i]):
-                carbInput_time.append(pd.to_datetime(raw_time[i]).timestamp() / 300)  # divide time by 300 to get 5 minute intervals
-                carbInput_value.append(float(raw_carbInput[i]))
-        carbInput_time = np.array(carbInput_time)
-        carbInput_value = np.array(carbInput_value)
-        sorter = np.argsort(carbInput_time)
-        carbInput_time = carbInput_time[sorter]
-        carbInput_value = carbInput_value[sorter]
+        #for i in range(len(raw_time)):
+            #if not np.isnan(raw_carbInput[i]):
+            #    carbInput_time.append(pd.to_datetime(raw_time[i]).timestamp() / 300)  # divide time by 300 to get 5 minute intervals
+            #    carbInput_value.append(float(raw_carbInput[i]))
+        #carbInput_time = np.array(carbInput_time)
+        #carbInput_value = np.array(carbInput_value)
+        #sorter = np.argsort(carbInput_time)
+        #carbInput_time = carbInput_time[sorter]
+        #carbInput_value = carbInput_value[sorter]
         # do interpolation
-        carbInput_time = np.array(carbInput_time) - zerotime
-        out = np.full(len(basetime), np.nan)
-        for i in range(len(carbInput_time)):
-            if int(carbInput_time[i]) < len(basetime) and int(carbInput_time[i]) >= 0:  # check for "int(time[i]) >= 0" since timestamps from other parameters prior to the first timestamp from glucose_values are igrnored
-                out[int(carbInput_time[i])] = carbInput_value[i]
-        dict['carbInput'] = out
+        #carbInput_time = np.array(carbInput_time) - zerotime
+        #out = np.full(len(basetime), np.nan)
+        #for i in range(len(carbInput_time)):
+        #    if int(carbInput_time[i]) < len(basetime) and int(carbInput_time[i]) >= 0:  # check for "int(time[i]) >= 0" since timestamps from other parameters prior to the first timestamp from glucose_values are igrnored
+        #        out[int(carbInput_time[i])] = carbInput_value[i]
+        #dict['carbInput'] = out
 
         # process insulinCarbRatio
-        insulinCarbRatio_time = []
-        insulinCarbRatio_value = []
-        for i in range(len(raw_time)):
-            if not np.isnan(raw_insulinCarbRatio[i]):
-                insulinCarbRatio_time.append(pd.to_datetime(raw_time[i]).timestamp() / 300)  # divide time by 300 to get 5 minute intervals
-                insulinCarbRatio_value.append(float(raw_insulinCarbRatio[i]))
-        insulinCarbRatio_time = np.array(insulinCarbRatio_time)
-        insulinCarbRatio_value = np.array(insulinCarbRatio_value)
-        sorter = np.argsort(insulinCarbRatio_time)
-        insulinCarbRatio_time = insulinCarbRatio_time[sorter]
-        insulinCarbRatio_value = insulinCarbRatio_value[sorter]
-        # do interpolation
-        insulinCarbRatio_time = np.array(insulinCarbRatio_time) - zerotime
-        out = np.full(len(basetime), np.nan)
-        for i in range(len(insulinCarbRatio_time)):
-            if int(insulinCarbRatio_time[i]) < len(basetime) and int(insulinCarbRatio_time[i]) >= 0:  # check for "int(time[i]) >= 0" since timestamps from other parameters prior to the first timestamp from glucose_values are igrnored
-                out[int(insulinCarbRatio_time[i])] = insulinCarbRatio_value[i]
-        dict['insulinCarbRatio'] = out
+        #insulinCarbRatio_time = []
+        #insulinCarbRatio_value = []
+        #for i in range(len(raw_time)):
+        #    if not np.isnan(raw_insulinCarbRatio[i]):
+        #        insulinCarbRatio_time.append(pd.to_datetime(raw_time[i]).timestamp() / 300)  # divide time by 300 to get 5 minute intervals
+        #        insulinCarbRatio_value.append(float(raw_insulinCarbRatio[i]))
+        #insulinCarbRatio_time = np.array(insulinCarbRatio_time)
+        #insulinCarbRatio_value = np.array(insulinCarbRatio_value)
+        #sorter = np.argsort(insulinCarbRatio_time)
+        #insulinCarbRatio_time = insulinCarbRatio_time[sorter]
+        #insulinCarbRatio_value = insulinCarbRatio_value[sorter]
+        ## do interpolation
+        #insulinCarbRatio_time = np.array(insulinCarbRatio_time) - zerotime
+        #out = np.full(len(basetime), np.nan)
+        #for i in range(len(insulinCarbRatio_time)):
+        #    if int(insulinCarbRatio_time[i]) < len(basetime) and int(insulinCarbRatio_time[i]) >= 0:  # check for "int(time[i]) >= 0" since timestamps from other parameters prior to the first timestamp from glucose_values are igrnored
+        #        out[int(insulinCarbRatio_time[i])] = insulinCarbRatio_value[i]
+        #dict['insulinCarbRatio'] = out
 
         # process insulinOnBoard
-        insulinOnBoard_time = []
-        insulinOnBoard_value = []
-        for i in range(len(raw_time)):
-            if not np.isnan(raw_insulinOnBoard[i]):
-                insulinOnBoard_time.append(pd.to_datetime(raw_time[i]).timestamp() / 300)  # divide time by 300 to get 5 minute intervals
-                insulinOnBoard_value.append(float(raw_insulinOnBoard[i]))
-        insulinOnBoard_time = np.array(insulinOnBoard_time)
-        insulinOnBoard_value = np.array(insulinOnBoard_value)
-        sorter = np.argsort(insulinOnBoard_time)
-        insulinOnBoard_time = insulinOnBoard_time[sorter]
-        insulinOnBoard_value = insulinOnBoard_value[sorter]
-        # do interpolation
-        insulinOnBoard_time = np.array(insulinOnBoard_time) - zerotime
-        out = np.full(len(basetime), np.nan)
-        for i in range(len(insulinOnBoard_time)):
-            if int(insulinOnBoard_time[i]) < len(basetime) and int(insulinOnBoard_time[i]) >= 0:  # check for "int(time[i]) >= 0" since timestamps from other parameters prior to the first timestamp from glucose_values are igrnored
-                out[int(insulinOnBoard_time[i])] = insulinOnBoard_value[i]
-        dict['insulinOnBoard'] = out
+        #insulinOnBoard_time = []
+        #insulinOnBoard_value = []
+        #for i in range(len(raw_time)):
+        #    if not np.isnan(raw_insulinOnBoard[i]):
+        #        insulinOnBoard_time.append(pd.to_datetime(raw_time[i]).timestamp() / 300)  # divide time by 300 to get 5 minute intervals
+        #        insulinOnBoard_value.append(float(raw_insulinOnBoard[i]))
+        #insulinOnBoard_time = np.array(insulinOnBoard_time)
+        #insulinOnBoard_value = np.array(insulinOnBoard_value)
+        #sorter = np.argsort(insulinOnBoard_time)
+        #insulinOnBoard_time = insulinOnBoard_time[sorter]
+        #insulinOnBoard_value = insulinOnBoard_value[sorter]
+        ## do interpolation
+        #insulinOnBoard_time = np.array(insulinOnBoard_time) - zerotime
+        #out = np.full(len(basetime), np.nan)
+        #for i in range(len(insulinOnBoard_time)):
+        #    if int(insulinOnBoard_time[i]) < len(basetime) and int(insulinOnBoard_time[i]) >= 0:  # check for "int(time[i]) >= 0" since timestamps from other parameters prior to the first timestamp from glucose_values are igrnored
+        #        out[int(insulinOnBoard_time[i])] = insulinOnBoard_value[i]
+        #dict['insulinOnBoard'] = out
 
         # save data frame
         df = pd.DataFrame(dict)
@@ -315,8 +321,10 @@ class DataloaderTidepoolHCL150(Dataloader):
         if calculate_iob == True:
             df['iob'] = calculate_total_iob(df['bolus'].values, ts_min=5, t_action_max_min=240)
             #df['iob'] = pd.Series(df['iob']).rolling(window=12, min_periods=1).mean().to_numpy()
-            df['cob'] = calculate_total_cob(df['carbInput'].values, carb_absorption=0.8, ts_min=5, t_action_max_min=240)
+            #df['cob'] = calculate_total_cob(df['carbInput'].values, carb_absorption=0.8, ts_min=5, t_action_max_min=240)
             #df['cob'] = pd.Series(df['cob']).rolling(window=12, min_periods=1).mean().to_numpy()
         df['hr'] = np.nan
+        df['cob'] = np.nan
+        df['carbInput'] = np.nan
         return df, patient_id
 
