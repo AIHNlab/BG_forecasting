@@ -30,13 +30,13 @@ class Dataloader(ABC):
 
         for key, df in self.train_dataframes.items():
             if key not in self.train_metadata:
-                self.train_metadata[key] = {}
-            self.train_metadata[key].update(self.update_metadata(df))
+                self.train_metadata[str(key)] = {}
+            self.train_metadata[str(key)].update(self.update_metadata(df))
     
         for key, df in self.test_dataframes.items():
             if key not in self.test_metadata:
-                self.test_metadata[key] = {}
-            self.test_metadata[key].update(self.update_metadata(df))
+                self.test_metadata[str(key)] = {}
+            self.test_metadata[str(key)].update(self.update_metadata(df))
 
     def update_metadata(self, df):
         desc_stats = df['cbg'].describe()
