@@ -10,7 +10,7 @@ class DataPrepper:
                  forecast_steps=24, scaler_class_x = None, scaler_class_y = None, sequence_length = 25, patch_size=288,
                  feature_list = ['cbg', 'basal', 'carbInput', 'bolus'], target_list = ['cbg'],
                  step = 1, allowed_missing_values_rate = [0.5,1.0,1.0], allowed_missing_values_rate_target = [0.0,1.0,1.0], fill_types=None, experiment_path=None, history_of_days=0,
-                 test_target="cbg", mask_prob=0.0, chance_of_smbg=0.0, chance_feature_missing=0.0, metadata=None, rolling_mean_window=None, mask_future_target_covariates=False, disabled_covariates=[0,1,1], context_limit=48):
+                 test_target="cbg", mask_prob=0.0, chance_of_smbg=0.0, chance_feature_missing=0.0, metadata=None, rolling_mean_window=None, mask_future_target_covariates=True, disabled_covariates=[0,0,0], context_limit=None, baseline=False):
 
         self.participants = participants
 
@@ -58,7 +58,7 @@ class DataPrepper:
                     df[target].replace(0, np.nan, inplace=True)
                     
         self.scaler_x = Scaler(dataframes=dataframes, features=self.feature_list, scaler=scaler_class_x, missing_mask=None, is_input=True, file_path=experiment_path)
-        self.scaler_y = Scaler(dataframes=dataframes, features=self.target_list, scaler=scaler_class_y, missing_mask=None, is_input=False, file_path=experiment_path)
+        self.scaler_y = Scaler(dataframes=dataframes, features=[test_target], scaler=scaler_class_y, missing_mask=None, is_input=False, file_path=experiment_path)
         self.hypoglycemia_threshold = self.scaler_x.transform_single_value(70)
         self.hyperglycemia_threshold = self.scaler_x.transform_single_value(180)
         self.test_target = test_target
@@ -69,6 +69,8 @@ class DataPrepper:
         self.mask_future_target_covariates = mask_future_target_covariates
         self.disabled_covariates = disabled_covariates
         self.context_limit = context_limit
+        self.baseline = baseline
+
     #@profile
     def make_features_and_targetpair(self):
         participant_datasets = []
@@ -76,6 +78,7 @@ class DataPrepper:
         for participant in tqdm(self.participants, desc="Processing participants"):
             if participant == self.specific_participant or self.specific_participant is None:
                 df_participant = self.dataframes[participant]#.rolling(window=12, min_periods=1).mean()
+                #df_participant["cbg"] = df_participant["finger"]
                   # Add or remove columns as needed
                 for i, feature in enumerate(self.feature_list):
                     if feature in df_participant.columns:
@@ -89,10 +92,23 @@ class DataPrepper:
                 targets_missing_mask = targets[self.target_list].isna().values
 
                 features = self._normalize(features, self.scaler_x).values
-                targets = self._normalize(targets, self.scaler_y).values
-                #Pad with -9 in the begginning equal to sequence length
-                features = np.pad(features, ((self.sequence_length, 0), (0, 0)), 'constant', constant_values=-9)
-                targets = np.pad(targets, ((self.sequence_length, 0), (0, 0)), 'constant', constant_values=-9)
+                targets = self._normalize(targets, self.scaler_x).values
+                # Resize the features array to accommodate padding
+                padded_features = np.zeros((features.shape[0] + self.sequence_length, features.shape[1]))
+
+                for i, fill_value in enumerate(self.fill_types):
+                    if isinstance(fill_value, (int, float)):  # Ensure fill_value is numeric
+                        padded_features[:, i] = np.pad(
+                            features[:, i], 
+                            (self.sequence_length, 0), 
+                            'constant', 
+                            constant_values=fill_value
+                        )
+                    else:
+                        raise ValueError(f"Fill type for feature {self.feature_list[i]} must be numeric.")
+
+                features = padded_features  # Replace the original features with the padded version
+                targets = np.pad(targets, ((self.sequence_length, 0), (0, 0)), 'constant', constant_values=-8)
                 self.handle_missing_values(features, self.feature_list, self.fill_types)
                 self.handle_missing_values(targets, self.target_list, np.full(len(self.target_list), -8))
 
@@ -116,7 +132,8 @@ class DataPrepper:
                     metadata=self.metadata[participant],
                     mask_future_target_covariates=self.mask_future_target_covariates,
                     disabled_covariates=self.disabled_covariates,
-                    context_limit=self.context_limit
+                    context_limit=self.context_limit,
+                    baseline=self.baseline
                     #hypo_threshold= self.hypoglycemia_threshold,
                     #hyper_threshold=self.hyperglycemia_threshold,
                 )
