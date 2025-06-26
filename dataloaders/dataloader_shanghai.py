@@ -87,8 +87,10 @@ class DataloaderShanghai(Dataloader):
         for col in df.columns:
             if 'bolus insulin' in col.lower():
                 df = df.rename(columns={col: 'bolus'})
+                df['bolus'] = df['bolus'].apply(lambda x: np.nan if isinstance(x, str) else x)
             elif 'basal insulin' in col.lower():
                 df = df.rename(columns={col: 'basal'})
+                df['basal'] = df['basal'].apply(lambda x: np.nan if isinstance(x, str) else x)
             elif 'cgm' in col.lower():
                 df = df.rename(columns={col: 'cbg'})
             elif 'date' in col.lower():
