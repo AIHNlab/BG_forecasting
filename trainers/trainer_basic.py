@@ -50,7 +50,10 @@ class TrainerBasic:
                 data, targets = data.to(self.device), targets.to(self.device)
                 self.optimizer.zero_grad()
                 outputs = self.model(data)
-                loss = self.criterion(outputs, targets)
+                valid_mask = (targets != -8) & (targets != -9)
+                masked_outputs = outputs[valid_mask]
+                masked_targets = targets[valid_mask]
+                loss = self.criterion(masked_outputs, masked_targets)
                 loss.backward()
                 self.optimizer.step()
                 total_loss += loss.item()
@@ -147,7 +150,7 @@ class TrainerBasic:
         #plt.title('Predictions vs Actuals')
         #plt.legend()
         #plt.show()
-
+        actuals = np.where(np.isin(actuals, [-8, -9]), np.nan, actuals)
         if scaler is not None:
             predictions = scaler.inverse_transform(predictions)
             actuals = scaler.inverse_transform(actuals)
