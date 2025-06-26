@@ -60,7 +60,7 @@ class TidepoolLSTM(nn.Module):
         # Output layer
         x = self.fc4(x)
         x = torch.unsqueeze(x, dim=-1)
-        return x
+        return x[:, :, 0]  # Return the output without the last dimension
 
 # Example usage
 #model = GlucosePredictionModel()
