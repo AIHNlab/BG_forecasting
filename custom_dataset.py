@@ -65,7 +65,7 @@ class SequenceDataset(Dataset):
     def __init__(self, input_data, input_data_missing_mask, target_data, target_data_missing_mask, 
                  sequence_length, forecast_steps, step, allowed_missing_values_rate, allowed_missing_values_rate_target,
                  feature_list, target_list, test_target, patch_size, mask_prob, chance_of_smbg, chance_feature_missing, metadata,
-                 mask_future_target_covariates=True, disabled_covariates=None, context_limit=None):#, mask_ratio, chance_of_feature_missing):
+                 mask_future_target_covariates=True, disabled_covariates=None, context_limit=None, baseline=False):#, mask_ratio, chance_of_feature_missing):
         
         self.input_data = input_data  # NumPy array
         self.input_data_missing_mask = input_data_missing_mask  # NumPy array
@@ -98,7 +98,8 @@ class SequenceDataset(Dataset):
         required_metadata = ['diagnosis_type', 'biological_sex', 'device_type', 'age', 'bmi']
         self.mask_future_target_covariates = mask_future_target_covariates
         self.disabled_covariates = disabled_covariates
-        self.context_limit = context_limit 
+        self.context_limit = context_limit
+        self.baseline = baseline
 
         # Define default values by field type
         default_values = {
@@ -194,6 +195,8 @@ class SequenceDataset(Dataset):
         # reshape to patch_size
         #sequence = self.periodicity_reshape(sequence, self.n_features, 'apply')
         #target = self.periodicity_reshape(target, self.n_features, 'apply')
+        if self.baseline:
+            return sequence[:-self.forecast_steps, :], target[-self.forecast_steps:, self.test_target_index]
         if self.metadata:
             return sequence, target, self.metadata
         else:
