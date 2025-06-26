@@ -165,16 +165,33 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
                               metadata=metadata,
                               mask_future_target_covariates=False,
                               disabled_covariates=config['run_config']['disabled_covariates'],
-                              context_limit=config['hp_config']['context_limit']
+                              context_limit=config['hp_config']['context_limit'],
+                              baseline= config['hp_config']['baseline']
                               )
         testset = prepper.make_features_and_targetpair()
         #test_data = CustomDataset(features_test, target_test, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
         test_loader = DataLoader(testset, shuffle=False, batch_size=config['hp_config']['batch_size'])
         trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth')
-        predictions, actuals, means, stds, hyper_probs, hypo_probs = trainer.test(test_loader, scaler=prepper.scaler_x.scaler, hypoglycemia_threshold=prepper.hypoglycemia_threshold, hyperglycemia_threshold=prepper.hyperglycemia_threshold)
+        if config['hp_config']['baseline']:
+            # Yes, you can pass a scaler for just one of the channels if your trainer/test method supports it.
+            # For example, if you only want to scale channel 0, you could do:
+            predictions, actuals = trainer.test(test_loader, scaler=prepper.scaler_y.scaler)
+            means, stds, hyper_probs, hypo_probs = None, None, None, None
+            predictions = np.where(np.isin(predictions, [-8, -9]), np.nan, predictions)
+        else:
+            predictions, actuals, means, stds, hyper_probs, hypo_probs = trainer.test(test_loader, scaler=prepper.scaler_x.scaler, hypoglycemia_threshold=prepper.hypoglycemia_threshold, hyperglycemia_threshold=prepper.hyperglycemia_threshold)
         
         if actuals.size == 0:
             continue
+
+        # Ensure means, stds, hyper_probs, hypo_probs are arrays of correct shape if None
+        predictions = np.array(predictions)
+        actuals = np.array(actuals)
+        # Ensure means, stds, hyper_probs, hypo_probs are arrays of correct shape if None
+        means = predictions.copy() if means is None else means
+        stds = np.zeros_like(predictions) if stds is None else stds
+        hyper_probs = np.zeros_like(predictions[:,0].flatten()) if hyper_probs is None else hyper_probs
+        hypo_probs = np.zeros_like(predictions[:,0].flatten()) if hypo_probs is None else hypo_probs
 
         actuals_original = np.array(actuals)
         
@@ -203,7 +220,11 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
         # Run evaluation for multiple thresholds
         thresholds = [0.20, 0.35, 0.5, 0.65, 0.80]
         for threshold in thresholds:
-            event_metrics = run_evaluation(actuals, hyper_probs, hypo_probs, participant, config, threshold=threshold)
+            event_metrics = run_evaluation(
+                actuals, hyper_probs, hypo_probs, participant, config, threshold=threshold,
+                actuals_original=actuals_original,  # pass the multi-channel array
+                required_samples=config['run_config'].get('required_samples_during_test', [24, 1, 1])   # pass the per-channel requirements
+            )
             if event_metrics is not None:
                 # Add threshold info to the metrics
                 event_metrics['threshold'] = threshold
@@ -217,7 +238,7 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
             std_horizon = np.array(stds)[:, horizon-1].flatten()
             mean_horizon = np.array(means)[:, horizon-1].flatten()
             
-            if True:
+            if actuals_original is not None:
                 # NOW USE ORIGINAL DATA FOR MASKING
                 nan_mask = np.isnan(actual_horizon)
                 window = config['run_config'].get('required_samples_window', 24)
@@ -477,7 +498,11 @@ def train_model_glucobench(config, dataframes_train, dataframes_val, retrain_mod
                                 experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'],
                                 step=config['run_config']['step_training'],
                                 sequence_length=config['hp_config']['feature_window'],
-                                history_of_days=config['hp_config']['history_of_days'])
+                                history_of_days=config['hp_config']['history_of_days'],
+                                mask_future_target_covariates=True,
+                                disabled_covariates=config['run_config']['disabled_covariates'],
+                                context_limit=config['hp_config']['context_limit'],
+                                baseline=config['hp_config']['baseline'])
     features_train, target_train = train_prepper.make_features_and_targetpair()
     
     val_prepper = DataPrepper(dataframes_val.keys(), 
@@ -494,7 +519,11 @@ def train_model_glucobench(config, dataframes_train, dataframes_val, retrain_mod
                               experiment_path=os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path'],
                               step=config['run_config']['step_training'],
                               sequence_length=config['hp_config']['feature_window'],
-                              history_of_days=config['hp_config']['history_of_days'])
+                              history_of_days=config['hp_config']['history_of_days'],
+                              mask_future_target_covariates=True,
+                              disabled_covariates=config['run_config']['disabled_covariates'],
+                              context_limit=config['hp_config']['context_limit'],
+                              baseline= config['hp_config']['baseline'])
     features_val, target_val = val_prepper.make_features_and_targetpair()
     
     # Split the training data into training and validation sets
@@ -572,7 +601,11 @@ def main(config, train=True, test=True):
                               chance_of_smbg=config['hp_config']['chance_of_smbg'],
                               chance_feature_missing=config['hp_config']['chance_feature_missing'],
                               metadata=data_handler.get_train_metadata(),
-                              )
+                              mask_future_target_covariates=True,
+                              disabled_covariates=config['run_config']['disabled_covariates'],
+                              context_limit=config['hp_config']['context_limit'],
+                              baseline= config['hp_config']['baseline'])
+                              
         dataset = prepper.make_features_and_targetpair()
         #prepper = DataPrepper(participants_test, data_handler, feature_list=config['run_config']['features'], data_type="test", forecast_steps=config['run_config']['forecast_steps'], scaler_class_x=scaler_class_x, scaler_class_y=scaler_class_y, fill_types=config['run_config']['fill_types'], experiment_path=config['run_config']['experiment_path'])
         #features_test, target_test = prepper.make_features_and_targetpair()
@@ -629,7 +662,7 @@ if __name__ == "__main__":
     #data_handler.load_data(save_as_csv=True)
     #data_handler = DataHandler("DataloaderTidepoolSAP100", r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data", dataset_name="Tidepool_SAP100")
     #data_handler.load_data(save_as_csv=True)
-    experiment_path = os.path.join('experiments','CGMBolusCHO')
+    experiment_path = os.path.join('experiments','LinReg')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'
