@@ -14,7 +14,7 @@ class SciKitLinearRegressionModel:
         self.retrain_model = retrain_model
 
     def train(self, train_loader, val_loader=None):
-        X_train, y_train = self._dataloader_to_numpy(train_loader)
+        X_train, y_train = self._dataloader_to_numpy(train_loader, drop_invalid_targets=True)
         self.model.fit(X_train, y_train)
         # Save the model
         with open(self.model_path, 'wb') as f:
@@ -26,9 +26,9 @@ class SciKitLinearRegressionModel:
             with open(self.model_path, 'rb') as f:
                 self.model = pickle.load(f)
 
-        X_test, y_test = self._dataloader_to_numpy(test_loader)
+        X_test, y_test = self._dataloader_to_numpy(test_loader, drop_invalid_targets=False)
         predictions = self.model.predict(X_test)
-        
+        y_test = np.where(np.isin(y_test, [-8, -9]), np.nan, y_test)
         if scaler:
             predictions = scaler.inverse_transform(predictions)
             y_test = scaler.inverse_transform(y_test)
@@ -36,11 +36,23 @@ class SciKitLinearRegressionModel:
         y_test = np.expand_dims(y_test, axis=-1)
         return predictions, y_test
 
-    def _dataloader_to_numpy(self, dataloader):
+    def _dataloader_to_numpy(self, dataloader, drop_invalid_targets=True):
         X_list, y_list = [], []
         for X_batch, y_batch in dataloader:
-            X_list.append(X_batch.numpy().reshape(X_batch.shape[0], -1))
-            y_list.append(y_batch.numpy().reshape(y_batch.shape[0], -1))
+            X_np = X_batch.numpy().reshape(X_batch.shape[0], -1)
+            y_np = y_batch.numpy().reshape(y_batch.shape[0], -1)
+
+            # Convert -8 or -9 to np.nan
+            y_np = np.where(np.isin(y_np, [-8, -9]), np.nan, y_np)
+
+            if drop_invalid_targets:
+                valid_rows = ~np.isnan(y_np).any(axis=1)
+                X_np = X_np[valid_rows]
+                y_np = y_np[valid_rows]
+
+            X_list.append(X_np)
+            y_list.append(y_np)
+
         X = np.vstack(X_list)
         y = np.vstack(y_list)
         return X, y
