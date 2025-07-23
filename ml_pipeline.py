@@ -179,7 +179,7 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
             means, stds, hyper_probs, hypo_probs = None, None, None, None
             predictions = np.where(np.isin(predictions, [-8, -9]), np.nan, predictions)
         else:
-            predictions, actuals, means, stds, hyper_probs, hypo_probs = trainer.test(test_loader, scaler=prepper.scaler_x.scaler, hypoglycemia_threshold=prepper.hypoglycemia_threshold, hyperglycemia_threshold=prepper.hyperglycemia_threshold)
+            predictions, actuals, means, stds, hyper_probs, hypo_probs, historic_context = trainer.test(test_loader, scaler=prepper.scaler_y.scaler, hypoglycemia_threshold=prepper.hypoglycemia_threshold, hyperglycemia_threshold=prepper.hyperglycemia_threshold, scaler_input=prepper.scaler_x.scaler)
         
         if actuals.size == 0:
             continue
@@ -193,8 +193,8 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
         hyper_probs = np.zeros_like(predictions[:,0].flatten()) if hyper_probs is None else hyper_probs
         hypo_probs = np.zeros_like(predictions[:,0].flatten()) if hypo_probs is None else hypo_probs
 
-        actuals_original = np.array(actuals)
-        
+        historic_context = np.array(historic_context) if historic_context is not None else None
+
         rmse_values = {'Participant': participant}
         if config['hp_config']['forecast_steps'] > 1:
             predictions = np.array(predictions)[:, -config['hp_config']['forecast_steps']:, prepper.test_target_index]
@@ -222,7 +222,7 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
         for threshold in thresholds:
             event_metrics = run_evaluation(
                 actuals, hyper_probs, hypo_probs, participant, config, threshold=threshold,
-                actuals_original=actuals_original,  # pass the multi-channel array
+                historic_context=historic_context,  # pass the multi-channel array
                 required_samples=config['run_config'].get('required_samples_during_test', [24, 1, 1])   # pass the per-channel requirements
             )
             if event_metrics is not None:
@@ -238,40 +238,38 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
             std_horizon = np.array(stds)[:, horizon-1].flatten()
             mean_horizon = np.array(means)[:, horizon-1].flatten()
             
-            if actuals_original is not None:
-                # NOW USE ORIGINAL DATA FOR MASKING
+            if historic_context is not None:
+                # Use the input given to the model for masking
                 nan_mask = np.isnan(actual_horizon)
                 window = config['run_config'].get('required_samples_window', 24)
-                
+
                 # Get required samples for each input channel from config
                 required_samples = config['run_config'].get('required_samples_during_test', [24, 1, 1])
-                
+
                 nan_window_mask = np.zeros_like(nan_mask, dtype=bool)
                 nan_window_mask[:window] = True
-                
+
                 for i in range(window, len(nan_mask)):
-                    # Check input channel requirements using ORIGINAL multi-channel data
+                    # Check input channel requirements using the model's input data
                     should_mask = False
-                    
-                    if i < len(actuals_original):
-                        window_start = max(0, i - window)
-                        window_actuals = actuals_original[window_start:i]  # Shape: [window_size, forecast_steps, channels]
-                        
+
+                    if i < len(historic_context):
+                        #window_start = max(0, i - window)
+                        window_inputs = historic_context[i, -window:, :]  # Shape: [window_size, context, channels]
+
                         # Check requirements for each input channel
                         for channel_idx, required_count in enumerate(required_samples):
-                            if channel_idx < window_actuals.shape[2]:  # Check if channel exists
-                                # Count valid samples for this channel across the window
-                                # Take the corresponding forecast step (horizon-1) for this channel
-                                if horizon-1 < window_actuals.shape[1]:
-                                    channel_data = window_actuals[:, horizon-1, channel_idx]  # [window_size]
-                                    valid_count = np.sum(~np.isnan(channel_data))
-                                    
-                                    if valid_count < required_count:
-                                        should_mask = True
-                                        break
-                    
+                            if channel_idx < window_inputs.shape[1]:  # Check if channel exists
+                                # Count valid samples for this channel across the window and context
+                                channel_data = window_inputs[:, channel_idx]  # Shape: [window_size, context]
+                                valid_count = np.sum(~np.isnan(channel_data))
+
+                                if valid_count < required_count:
+                                    should_mask = True
+                                    break
+
                     nan_window_mask[i] = should_mask
-                
+
                 final_mask = nan_mask | nan_window_mask
             else:
                 # Filter the arrays using the mask
@@ -662,7 +660,7 @@ if __name__ == "__main__":
     #data_handler.load_data(save_as_csv=True)
     #data_handler = DataHandler("DataloaderTidepoolSAP100", r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data", dataset_name="Tidepool_SAP100")
     #data_handler.load_data(save_as_csv=True)
-    experiment_path = os.path.join('experiments','LinReg')
+    experiment_path = os.path.join('experiments','SepForecastToken')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'

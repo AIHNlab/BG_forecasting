@@ -114,7 +114,7 @@ def plot_filtered_events(ax, true_binary, pred_binary, threshold):
     ax.legend(loc='upper right')
 
 
-def run_evaluation(actuals, hyper_probs, hypo_probs, participant, config, threshold=0.4, actuals_original=None, required_samples=None):
+def run_evaluation(actuals, hyper_probs, hypo_probs, participant, config, threshold=0.4, historic_context=None, required_samples=None):
     if hyper_probs is None or hypo_probs is None:
         return
 
@@ -124,40 +124,49 @@ def run_evaluation(actuals, hyper_probs, hypo_probs, participant, config, thresh
     os.makedirs(evaluation_path, exist_ok=True)
 
     current_bg_levels = actuals[:, 0].flatten()[:-1]
-    nan_mask = np.isnan(current_bg_levels)
+    if historic_context is not None:
+        # Use the input given to the model for masking
+        nan_mask = np.isnan(current_bg_levels)
+        window = config['run_config'].get('required_samples_window', 24)
 
-    window = config['run_config'].get('required_samples_window', 24)
-    # Use required_samples from config if not provided
-    if required_samples is None:
+        # Get required samples for each input channel from config
         required_samples = config['run_config'].get('required_samples_during_test', [24, 1, 1])
 
-    nan_window_mask = np.zeros_like(nan_mask, dtype=bool)
-    nan_window_mask[:window] = True
+        nan_window_mask = np.zeros_like(nan_mask, dtype=bool)
+        nan_window_mask[:window] = True
 
-    # Channel-aware masking if actuals_original is provided
-    if actuals_original is not None:
         for i in range(window, len(nan_mask)):
+            # Check input channel requirements using the model's input data
             should_mask = False
-            if i < len(actuals_original):
-                window_start = max(0, i - window)
-                window_actuals = actuals_original[window_start:i]  # [window, forecast_steps, channels]
+
+            if i < len(historic_context):
+                #window_start = max(0, i - window)
+                window_inputs = historic_context[i, -window:, :]  # Shape: [window_size, context, channels]
+
+                # Check requirements for each input channel
                 for channel_idx, required_count in enumerate(required_samples):
-                    if channel_idx < window_actuals.shape[2]:
-                        # For alarms, horizon is always 1 (i.e., step 0)
-                        if 0 < window_actuals.shape[1]:
-                            channel_data = window_actuals[:, 0, channel_idx]
-                            valid_count = np.sum(~np.isnan(channel_data))
-                            if valid_count < required_count:
-                                should_mask = True
-                                break
+                    if channel_idx < window_inputs.shape[1]:  # Check if channel exists
+                        # Count valid samples for this channel across the window and context
+                        channel_data = window_inputs[:, channel_idx]  # Shape: [window_size, context]
+                        valid_count = np.sum(~np.isnan(channel_data))
+
+                        if valid_count < required_count:
+                            should_mask = True
+                            break
+
             nan_window_mask[i] = should_mask
+
+        final_mask = nan_mask | nan_window_mask
     else:
-        # Fallback: old logic (mask if any NaN in last window)
+        # Filter the arrays using the mask
+        nan_mask = np.isnan(historic_context)
+        window = 24
+        nan_window_mask = np.zeros_like(nan_mask, dtype=bool)
         for i in range(window, len(nan_mask)):
             if np.any(nan_mask[i-window:i]):
                 nan_window_mask[i] = True
+        final_mask = nan_mask | nan_window_mask
 
-    final_mask = nan_mask | nan_window_mask
     hyper_probs_arr = np.array(hyper_probs[1:])
     hypo_probs_arr = np.array(hypo_probs[1:])
     hyper_probs_arr[final_mask] = np.nan
