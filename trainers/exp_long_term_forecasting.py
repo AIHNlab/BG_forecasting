@@ -253,6 +253,7 @@ class Args:
         self.e_layers = hp_config['encoder_layers'] # Interesting to add to hp_config
         self.forecast_steps = hp_config['forecast_steps']
         self.forecast_horizons = hp_config['forecast_horizons']
+        self.reconstruction = hp_config['reconstruction'] # True if we want to reconstruct the input sequence
         self.d_layers = 1 # Interesting to add to hp_config
         self.d_ff = 2048 # Interesting to add to hp_config
         self.moving_avg = 25 # Don't think this is used for iTransformer
@@ -493,11 +494,11 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         forecast_tokens = self.args.forecast_tokens  # This contains indices like [94, 95]
         
         # Select only the forecast tokens along the last dimension
-        outputs_forecasts = outputs[:, :, forecast_tokens]  # Shape: [batch, token_size, num_forecast_tokens]
-        batch_y_forecasts = batch_y[:, :, forecast_tokens]  # Shape: [batch, token_size, num_forecast_tokens]
+        outputs_forecasts = outputs#[:, :, forecast_tokens]  # Shape: [batch, token_size, num_forecast_tokens]
+        batch_y_forecasts = batch_y#[:, :, forecast_tokens]  # Shape: [batch, token_size, num_forecast_tokens]
         
         if outputs_var is not None:
-            outputs_var_forecasts = outputs_var[:, :, forecast_tokens]  # Shape: [batch, token_size, num_forecast_tokens]
+            outputs_var_forecasts = outputs_var  # Shape: [batch, token_size, num_forecast_tokens]
         
         # If we need to focus on a specific test_target feature
         #if test_target is not None:
@@ -528,7 +529,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             return masked_loss.sum() / (valid_mask.sum() + 1e-6)
 
     def calculate_alarm_loss(self, outputs, batch_y, alarm_type):
-        y = batch_y[:, :12, [self.args.first_forecast_token]]  # [batch, 12, 1]
+        y = batch_y[:, :12].unsqueeze(-1)  # [batch, 12, 1]
         if alarm_type == 'hypoglycemia':
             event = (y < self.args.hypoglycemia_threshold).float()
         elif alarm_type == 'hyperglycemia':
@@ -636,9 +637,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         self.model.eval()
         with torch.no_grad():
             batch_x_mark, batch_y_mark = None, None
-            for i, (batch_x, batch_y, metadata) in enumerate(vali_loader):
+            for i, (batch_x, batch_y_reconstruction, batch_y_forecast, metadata) in enumerate(vali_loader):
                 batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float().to(self.device)
+                batch_y_reconstruction = batch_y_reconstruction.float().to(self.device)
+                batch_y_forecast = batch_y_forecast.float().to(self.device)
                 for k, v in metadata.items():
                     if isinstance(v, torch.Tensor):
                         metadata[k] = v.float().to(self.device)
@@ -651,20 +653,20 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     batch_y_mark = batch_y_mark.float().to(self.device)
 
                 batch_x = self.periodicity_reshape(batch_x, self.args.n_features, 'apply')
-                batch_y = self.periodicity_reshape(batch_y, self.args.n_features, 'apply')
+                batch_y_reconstruction = self.periodicity_reshape(batch_y_reconstruction, self.args.n_features, 'apply')
 
-                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+                dec_inp = torch.zeros_like(batch_y_reconstruction[:, -self.args.pred_len:, :]).float()
+                dec_inp = torch.cat([batch_y_reconstruction[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
 
                 reconstruction, forecast, mean, variance, hyperglycemia, hypoglycemia = self.model(
                     batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True, metadata=metadata
                 )
 
-                recon_loss = self.calculate_reconstruction_loss(reconstruction, batch_x, batch_y, outputs_var=None)
-                forecast_loss = self.calculate_forecast_loss(forecast, batch_y, 0)
-                forecast_with_uncertainty_loss = self.calculate_forecast_loss(mean, batch_y, 0, outputs_var=variance)
-                hyper_loss = self.calculate_alarm_loss(hyperglycemia, batch_y, 'hyperglycemia')
-                hypo_loss = self.calculate_alarm_loss(hypoglycemia, batch_y, 'hypoglycemia')
+                recon_loss = self.calculate_reconstruction_loss(reconstruction, batch_x, batch_y_reconstruction, outputs_var=None)
+                forecast_loss = self.calculate_forecast_loss(forecast, batch_y_forecast, 0)
+                forecast_with_uncertainty_loss = self.calculate_forecast_loss(mean, batch_y_forecast, 0, outputs_var=variance)
+                hyper_loss = self.calculate_alarm_loss(hyperglycemia, batch_y_forecast, 'hyperglycemia')
+                hypo_loss = self.calculate_alarm_loss(hypoglycemia, batch_y_forecast, 'hypoglycemia')
 
                 total_recon_loss.append(recon_loss.item())
                 total_forecast_loss.append(forecast_loss.item())
@@ -768,12 +770,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             #This needs to be added back to support timestamps
             #for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(train_loader):
             batch_x_mark, batch_y_mark = None, None
-            for i, (batch_x, batch_y, metadata) in enumerate(train_loader):
+            for i, (batch_x, batch_y_reconstruction, batch_y_forecast, metadata) in enumerate(train_loader):
                 iter_count += 1
                 total_iters += 1
                 #model_optim.zero_grad()
                 batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float().to(self.device)
+                batch_y_reconstruction = batch_y_reconstruction.float().to(self.device)
+                batch_y_forecast = batch_y_forecast.float().to(self.device)
                 for k, v in metadata.items():
                     if isinstance(v, torch.Tensor):
                         metadata[k] = v.float().to(self.device)
@@ -781,7 +784,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
 
                 batch_x = self.periodicity_reshape(batch_x, self.args.n_features, 'apply')
-                batch_y = self.periodicity_reshape(batch_y, self.args.n_features, 'apply')
+                batch_y_reconstruction = self.periodicity_reshape(batch_y_reconstruction, self.args.n_features, 'apply')
 
                 #batch_x[:, -2:, :] = -7
                 #states = torch.zeros_like(batch_y) # Hypoglycemia
@@ -795,8 +798,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     batch_y_mark = batch_y_mark.float().to(self.device)
 
                 # decoder input
-                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+                dec_inp = torch.zeros_like(batch_y_reconstruction[:, -self.args.pred_len:, :]).float()
+                dec_inp = torch.cat([batch_y_reconstruction[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
 
                 #if self.args.output_attention:
                 #    outputs = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark)[0]
@@ -805,13 +808,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 # If doing masked autoencoding
                 reconstruction, forecast, mean, variance, hyperglycemia, hypoglycemia = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=return_variance, metadata=metadata)
 
-                loss = self.calculate_reconstruction_loss(reconstruction, batch_x, batch_y, outputs_var=None,tb_writer=writer, iter_count=total_iters)
+                loss = self.calculate_reconstruction_loss(reconstruction, batch_x, batch_y_reconstruction, outputs_var=None,tb_writer=writer, iter_count=total_iters)
                 #train_loss_target = self.calculate_test_target_loss(outputs, batch_y, train_loader.dataset.test_target_index, forecast_steps=self.args.forecast_steps)
-                forecast_loss = self.calculate_forecast_loss(forecast, batch_y, 0)
-                forecast_with_uncertainty_loss = self.calculate_forecast_loss(mean, batch_y, 0, outputs_var=variance)
-                
-                hyperglycemia_loss = self.calculate_alarm_loss(hyperglycemia, batch_y, 'hyperglycemia')
-                hypoglycemia_loss = self.calculate_alarm_loss(hypoglycemia, batch_y, 'hypoglycemia')
+                forecast_loss = self.calculate_forecast_loss(forecast, batch_y_forecast, 0)
+                forecast_with_uncertainty_loss = self.calculate_forecast_loss(mean, batch_y_forecast, 0, outputs_var=variance)
+
+                hyperglycemia_loss = self.calculate_alarm_loss(hyperglycemia, batch_y_forecast, 'hyperglycemia')
+                hypoglycemia_loss = self.calculate_alarm_loss(hypoglycemia, batch_y_forecast, 'hypoglycemia')
 
                 train_loss.append(loss.item())
                 forecast_losses.append(forecast_loss.item())
@@ -913,7 +916,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         writer.close()
         return self.model
 
-    def test(self, test_loader, test=1, scaler=None, hypoglycemia_threshold=70, hyperglycemia_threshold=180):
+    def test(self, test_loader, test=1, scaler=None, hypoglycemia_threshold=70, hyperglycemia_threshold=180, scaler_input=None):
         ii = 0
         #test_data, test_loader = self._get_data(flag='test')
         if test:
@@ -936,12 +939,14 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         all_batch_x = []
         hypo_probs = []
         hyper_probs = []
+        batch_y_reconstructions = []
         with torch.no_grad():
             #for i, (batch_x, batch_y, batch_x_mark, batch_y_mark) in enumerate(test_loader):
             batch_x_mark, batch_y_mark = None, None
-            for i, (batch_x, batch_y, metadata) in enumerate(test_loader):
+            for i, (batch_x, batch_y_reconstruction, batch_y_forecast, metadata) in enumerate(test_loader):
                 batch_x = batch_x.float().to(self.device)
-                batch_y = batch_y.float().to(self.device)
+                batch_y_forecast = batch_y_forecast.float().to(self.device)
+                batch_y_reconstruction = batch_y_reconstruction.float().to(self.device)
                 for k, v in metadata.items():
                     if isinstance(v, torch.Tensor):
                         metadata[k] = v.float().to(self.device)
@@ -953,10 +958,10 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     batch_x_mark = batch_x_mark.float().to(self.device)
                     batch_y_mark = batch_y_mark.float().to(self.device)
                 batch_x = self.periodicity_reshape(batch_x, self.args.n_features, 'apply')
-                batch_y = self.periodicity_reshape(batch_y, self.args.n_features, 'apply')
+                batch_y_reconstruction_dec_inp = self.periodicity_reshape(batch_y_reconstruction, self.args.n_features, 'apply')
                 # decoder input
-                dec_inp = torch.zeros_like(batch_y[:, -self.args.pred_len:, :]).float()
-                dec_inp = torch.cat([batch_y[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
+                dec_inp = torch.zeros_like(batch_y_reconstruction_dec_inp[:, -self.args.pred_len:, :]).float()
+                dec_inp = torch.cat([batch_y_reconstruction_dec_inp[:, :self.args.label_len, :], dec_inp], dim=1).float().to(self.device)
                 # encoder - decoder
                 if self.args.use_amp:
                     with torch.cuda.amp.autocast():
@@ -967,24 +972,26 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                     #reconstruction, forecast, mean, variance, hyperglycemia, hypoglycemia = self.model(batch_x, batch_x_mark, dec_inp, batch_y_mark, return_variance=True, metadata=metadata)
 
                 f_dim = -1 if self.args.features == 'MS' else 0
-
-                outputs = outputs[:, -self.args.pred_len:, f_dim:]
-                mean = mean[:, -self.args.pred_len:, f_dim:]
-                batch_y = batch_y[:, -self.args.pred_len:, f_dim:]
-                outputs_var = outputs_var[:, -self.args.pred_len:, f_dim:]
+                batch_y = batch_y_forecast
+                outputs = outputs[:, -self.args.pred_len:]
+                mean = mean[:, -self.args.pred_len:]
+                batch_y = batch_y[:, -self.args.pred_len:]
+                outputs_var = outputs_var[:, -self.args.pred_len:]
                 outputs_std = torch.sqrt(outputs_var)
                 batch_x = self.periodicity_reshape(batch_x, self.args.n_features, 'revert')
-                batch_y = self.periodicity_reshape(batch_y, self.args.n_features, 'revert')
-                outputs = self.periodicity_reshape(outputs, self.args.n_features, 'revert')
-                mean = self.periodicity_reshape(mean, self.args.n_features, 'revert')
-                outputs_std = self.periodicity_reshape(outputs_std, self.args.n_features, 'revert')
+                #batch_y = self.periodicity_reshape(batch_y, self.args.n_features, 'revert')
+                #outputs = self.periodicity_reshape(outputs, self.args.n_features, 'revert')
+                #mean = self.periodicity_reshape(mean, self.args.n_features, 'revert')
+                #outputs_std = self.periodicity_reshape(outputs_std, self.args.n_features, 'revert')
                 
                 outputs = outputs.detach().cpu().numpy()
                 mean = mean.detach().cpu().numpy()
                 outputs_std = outputs_std.detach().cpu().numpy()
                 batch_y = batch_y.detach().cpu().numpy()
                 batch_y = np.where(np.isin(batch_y, [-8, -9]), np.nan, batch_y)
-                
+                batch_y_reconstruction = batch_y_reconstruction.detach().cpu().numpy()
+                batch_y_reconstruction = np.where(np.isin(batch_y_reconstruction, [-8, -9]), np.nan, batch_y_reconstruction)
+
                 hyperglycemia = torch.sigmoid(hyperglycemia).detach().cpu().numpy()
                 hypoglycemia = torch.sigmoid(hypoglycemia).detach().cpu().numpy()
                 hyper_probs.extend(hyperglycemia.flatten())
@@ -997,30 +1004,34 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 pred = scaler.inverse_transform(outputs.reshape(-1, outputs.shape[-1])).reshape(outputs.shape)
                 mean_pred = scaler.inverse_transform(mean.reshape(-1, mean.shape[-1])).reshape(mean.shape)
                 true = scaler.inverse_transform(batch_y.reshape(-1, batch_y.shape[-1])).reshape(batch_y.shape)
-                std = outputs_std * scaler.scale_[None, None, :] 
+                batch_y_reconstruction = scaler_input.inverse_transform(batch_y_reconstruction.reshape(-1, batch_y_reconstruction.shape[-1])).reshape(batch_y_reconstruction.shape)
+                std = outputs_std * scaler.scale_[None, :] 
 
-                preds.append(pred[:,-self.args.forecast_steps:,:])
-                mean_preds.append(mean_pred[:,-self.args.forecast_steps:,:])
-                trues.append(true[:,-self.args.forecast_steps:,:])
-                stds.append(std[:,-self.args.forecast_steps:,:])
+                preds.append(pred[:,-self.args.forecast_steps:])
+                mean_preds.append(mean_pred[:,-self.args.forecast_steps:])
+                trues.append(true[:,-self.args.forecast_steps:])
+                stds.append(std[:,-self.args.forecast_steps:])
+                batch_y_reconstructions.append(batch_y_reconstruction)
 
         preds = np.array(preds[:-1])
         mean_preds = np.array(mean_preds[:-1])
         trues = np.array(trues[:-1])
         stds = np.array(stds[:-1])  # Convert stds to a numpy array
+        batch_y_reconstructions = np.array(batch_y_reconstructions[:-1])
         #print('test shape:', preds.shape, trues.shape, stds.shape)  # Include stds shape in the print statement
         # Check if trues is empty
         if trues.size == 0:
             print("Warning: 'trues' is empty. Skipping reshaping.")
         else:
-            preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
-            mean_preds = mean_preds.reshape(-1, mean_preds.shape[-2], mean_preds.shape[-1])
-            trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
-            stds = stds.reshape(-1, stds.shape[-2], stds.shape[-1])
+            preds = preds.reshape(preds.shape[0] * preds.shape[1], preds.shape[2])
+            mean_preds = mean_preds.reshape(mean_preds.shape[0] * mean_preds.shape[1], mean_preds.shape[2])
+            trues = trues.reshape(trues.shape[0] * trues.shape[1], trues.shape[2])
+            stds = stds.reshape(stds.shape[0] * stds.shape[1], stds.shape[2])
+            batch_y_reconstructions = batch_y_reconstructions.reshape(-1, batch_y_reconstructions.shape[-2], batch_y_reconstructions.shape[-1])
         hyper_probs = np.array(hyper_probs[:preds.shape[0]])
         hypo_probs = np.array(hypo_probs[:preds.shape[0]])
 
-        return preds, trues, mean_preds, stds, hyper_probs, hypo_probs
+        return np.expand_dims(preds, axis=-1), np.expand_dims(trues, axis=-1), np.expand_dims(mean_preds, axis=-1), np.expand_dims(stds, axis=-1), hyper_probs, hypo_probs, batch_y_reconstructions
 
 
     def predict(self, setting, load=False):

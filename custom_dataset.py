@@ -174,11 +174,11 @@ class SequenceDataset(Dataset):
             target[:, feature_mask] = -9
         
         # Set disabled covariates to -9
-        if not self.disabled_covariates:
+        if self.disabled_covariates:
             for i, disabled in enumerate(self.disabled_covariates):
                 if disabled == 1 and i < sequence.shape[1]:
                     sequence[:, i] = -9
-                    target[:, i] = -9
+                    #target[:, i] = -9
         
         # Set the non-cgm target values to -9 here to not predict covariates
         sequence[-self.forecast_steps:, :] = -9
@@ -195,12 +195,15 @@ class SequenceDataset(Dataset):
         # reshape to patch_size
         #sequence = self.periodicity_reshape(sequence, self.n_features, 'apply')
         #target = self.periodicity_reshape(target, self.n_features, 'apply')
+        target_reconstruction = target[:-self.forecast_steps, :]
+        target_forecast = target[-self.forecast_steps:, self.test_target_index]
+        sequence = sequence[:-self.forecast_steps, :]
         if self.baseline:
-            return sequence[:-self.forecast_steps, :], target[-self.forecast_steps:, self.test_target_index]
+            return sequence, target_forecast
         if self.metadata:
-            return sequence, target, self.metadata
+            return sequence, target_reconstruction, target_forecast, self.metadata
         else:
-            return sequence, target
+            return sequence, target_reconstruction, target_forecast
 
 class EventBalancedSampler(Sampler):
     def __init__(self, dataset, batch_size, threshold_low=70, threshold_high=180):
