@@ -548,7 +548,14 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         # If has_consecutive==1, target=1; else, use mean_target
         targets = torch.where(has_consecutive == 1, torch.ones_like(mean_target), mean_target)
 
-        loss = nn.BCEWithLogitsLoss()(outputs.squeeze(), targets)
+        # Ensure outputs and targets are 1D tensors and non-empty
+        #loss = nn.BCEWithLogitsLoss()(outputs.squeeze(), targets)
+        outputs_flat = outputs.view(-1)
+        targets_flat = targets.view(-1)
+        if outputs_flat.numel() == 0 or targets_flat.numel() == 0:
+            # Return a differentiable zero tensor if empty
+            return torch.zeros(1, requires_grad=True, device=outputs.device)
+        loss = nn.BCEWithLogitsLoss()(outputs_flat, targets_flat)
         return loss
 
     def calculate_loss_prev(self, outputs, batch_x, batch_y, masked_tokens=None):
