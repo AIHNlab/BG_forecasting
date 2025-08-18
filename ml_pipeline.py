@@ -140,6 +140,7 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
     mse_errors = []
     mae_errors = []
     calibration_summary = []
+    historic_context = None  # Ensure variable is always defined
     #i=0
     for participant in participants:
         #i+=1
@@ -660,7 +661,7 @@ if __name__ == "__main__":
     #data_handler.load_data(save_as_csv=True)
     #data_handler = DataHandler("DataloaderTidepoolSAP100", r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data", dataset_name="Tidepool_SAP100")
     #data_handler.load_data(save_as_csv=True)
-    experiment_path = os.path.join('experiments','SepForecastToken')
+    experiment_path = os.path.join('experiments','LinReg')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'

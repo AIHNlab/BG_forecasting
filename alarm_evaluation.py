@@ -159,7 +159,7 @@ def run_evaluation(actuals, hyper_probs, hypo_probs, participant, config, thresh
         final_mask = nan_mask | nan_window_mask
     else:
         # Filter the arrays using the mask
-        nan_mask = np.isnan(historic_context)
+        nan_mask = np.isnan(current_bg_levels)
         window = 24
         nan_window_mask = np.zeros_like(nan_mask, dtype=bool)
         for i in range(window, len(nan_mask)):
