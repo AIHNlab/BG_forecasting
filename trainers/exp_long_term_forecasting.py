@@ -529,31 +529,45 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             return masked_loss.sum() / (valid_mask.sum() + 1e-6)
 
     def calculate_alarm_loss(self, outputs, batch_y, alarm_type):
-        y = batch_y[:, :12].unsqueeze(-1)  # [batch, 12, 1]
+        # Take the first 12 timesteps and keep feature dim for comparison: [batch, 12, 1]
+        y = batch_y[:, :12].unsqueeze(-1)
+
+        # Build a valid-value mask (ignore -8 and -9)
+        valid_mask = ((y != -8) & (y != -9)).float()
+
+        # Compute event boolean, then zero-out missing values so they don't contribute
         if alarm_type == 'hypoglycemia':
-            event = (y < self.args.hypoglycemia_threshold).float()
+            event_bool = (y < self.args.hypoglycemia_threshold)
         elif alarm_type == 'hyperglycemia':
-            event = (y > self.args.hyperglycemia_threshold).float()
+            event_bool = (y > self.args.hyperglycemia_threshold)
         else:
             raise ValueError("Invalid alarm type. Use 'hypoglycemia' or 'hyperglycemia'.")
 
-        # event: [batch, 12, 1] -> [batch, 1, 12]
+        event = event_bool.float() * valid_mask  # [batch, 12, 1]
+
+        # Move to shape [batch, 1, 12] for 1D pooling windows
         event = event.permute(0, 2, 1)
-        pooled = F.avg_pool1d(event, kernel_size=3, stride=1)  # [batch, 1, 10]
-        has_consecutive = (pooled == 1.0).any(dim=2).float().squeeze(1)  # [batch]
+        valid = valid_mask.permute(0, 2, 1)
 
-        # Original mean-based target
-        mean_target = event.mean(dim=2).squeeze(1)  # [batch]
+        # Pool to detect consecutive windows of length 3. Only consider windows that are fully valid.
+        pooled_event = F.avg_pool1d(event, kernel_size=3, stride=1)  # [batch, 1, 10]
+        pooled_valid = F.avg_pool1d(valid, kernel_size=3, stride=1)  # [batch, 1, 10]
 
-        # If has_consecutive==1, target=1; else, use mean_target
+        # A fully-event window must have pooled_event == 1.0 and pooled_valid == 1.0
+        has_consecutive = ((pooled_event == 1.0) & (pooled_valid == 1.0)).any(dim=2).float().squeeze(1)  # [batch]
+
+        # Compute mean-based target using only valid counts (avoid dividing by 12 when values are missing)
+        sum_events = event.sum(dim=2).squeeze(1)  # [batch]
+        valid_counts = valid.sum(dim=2).squeeze(1)  # [batch]
+        mean_target = torch.where(valid_counts == 0, torch.zeros_like(sum_events), sum_events / (valid_counts + 1e-6))
+
+        # If has_consecutive==1, target=1; else, use mean over valid entries
         targets = torch.where(has_consecutive == 1, torch.ones_like(mean_target), mean_target)
 
-        # Ensure outputs and targets are 1D tensors and non-empty
-        #loss = nn.BCEWithLogitsLoss()(outputs.squeeze(), targets)
+        # Flatten and compute BCEWithLogits. If empty, return a differentiable zero.
         outputs_flat = outputs.view(-1)
         targets_flat = targets.view(-1)
         if outputs_flat.numel() == 0 or targets_flat.numel() == 0:
-            # Return a differentiable zero tensor if empty
             return torch.zeros(1, requires_grad=True, device=outputs.device)
         loss = nn.BCEWithLogitsLoss()(outputs_flat, targets_flat)
         return loss
