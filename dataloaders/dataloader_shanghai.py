@@ -96,6 +96,55 @@ class DataloaderShanghai(Dataloader):
             elif 'date' in col.lower():
                 df = df.rename(columns={col: '5minute_intervals_timestamp'})
 
+        # If the file contains a CBG column with a different name, map it to 'cbg'
+        if 'CBG (mg / dl)' in df.columns and 'cbg' not in df.columns:
+            df['cbg'] = df['CBG (mg / dl)']
+
+        # --- Upsample/resample to 5-minute frequency ---
+        # Assumptions: original timestamps are in a column named '5minute_intervals_timestamp'
+        # or similar; continuous signals (cbg, hr, cob, etc.) are interpolated in time;
+        # insulin/bolus values should remain as spikes (zeros between events).
+        time_col = None
+        for possible in ['5minute_intervals_timestamp', 'timestamp', 'date', 'Date', 'time']:
+            if possible in df.columns:
+                time_col = possible
+                break
+
+        if time_col is not None:
+            # parse datetimes and drop rows without a valid timestamp
+            df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
+            df = df.dropna(subset=[time_col]).sort_values(time_col)
+            df = df.set_index(time_col)
+
+            # create a 5-minute index that spans the data
+            try:
+                new_idx = pd.date_range(start=df.index.min(), end=df.index.max(), freq='5T')
+                df = df.reindex(new_idx)
+            except Exception:
+                # if date_range fails for any reason, skip resampling
+                df = df.reset_index(drop=False)
+
+            # Convert columns to numeric where possible (strings -> NaN)
+            for col in df.columns:
+                # leave non-object columns alone; coerce others
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+            # Insulin-like columns: keep spikes, fill missing with 0 between events
+            insulin_cols = [c for c in ['bolus', 'basal', 'Insulin dose - s.c.', 'Insulin dose - i.v.'] if c in df.columns]
+            if insulin_cols:
+                df[insulin_cols] = df[insulin_cols].fillna(0)
+
+            # Continuous numeric columns (except insulin) -> interpolate in time
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            interp_cols = [c for c in numeric_cols if c not in insulin_cols]
+            if interp_cols:
+                # interpolate using time index, then forward/backward fill edges
+                df[interp_cols] = df[interp_cols].interpolate(method='time').ffill().bfill()
+
+            # restore timestamp column name
+            df.index.name = '5minute_intervals_timestamp'
+            df = df.reset_index()
+
         # Add columns that may not exist in the file
         df['carbInput'] = np.nan
         df['hr'] = np.nan

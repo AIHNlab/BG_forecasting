@@ -76,14 +76,46 @@ class DataloaderAI4Food(Dataloader):
         # Find and rename columns containing specific keywords
         df = df.rename(columns={"glucose_value_in_mg_dl": 'cbg', "timestamp": '5minute_intervals_timestamp'})
 
-        # Add columns that may not exist in the file
+        # Add columns that may not exist in the file so resampling keeps them
         df['carbInput'] = np.nan
         df['hr'] = np.nan
         df['basal'] = np.nan
         df['bolus'] = np.nan
+
+        # --- Upsample/resample to 5-minute frequency ---
+        time_col = '5minute_intervals_timestamp'
+        if time_col in df.columns:
+            df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
+            df = df.dropna(subset=[time_col]).sort_values(time_col).set_index(time_col)
+            try:
+                new_idx = pd.date_range(start=df.index.min(), end=df.index.max(), freq='5T')
+                df = df.reindex(new_idx)
+            except Exception:
+                df = df.reset_index(drop=False)
+
+            # Coerce numeric columns
+            for col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+            # Keep insulin columns as spikes (fill missing with 0)
+            insulin_cols = [c for c in ['bolus', 'basal', 'Insulin dose - s.c.', 'Insulin dose - i.v.'] if c in df.columns]
+            if insulin_cols:
+                df[insulin_cols] = df[insulin_cols].fillna(0)
+
+            # Interpolate continuous numeric columns (cbg, hr, cob, etc.)
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            interp_cols = [c for c in numeric_cols if c not in insulin_cols]
+            if interp_cols:
+                df[interp_cols] = df[interp_cols].interpolate(method='time').ffill().bfill()
+
+            df.index.name = time_col
+            df = df.reset_index()
+
+        # Add iob/cob placeholders if requested (calculation may happen later)
         if calculate_iob:
             df['iob'] = np.nan
             df['cob'] = np.nan
+
         patient_id = file.split(os.sep)[-1].split('.')[0].replace('_glucose_levels', '')
         return df, patient_id
 
