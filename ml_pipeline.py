@@ -168,7 +168,7 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
                               disabled_covariates=config['run_config']['disabled_covariates'],
                               context_limit=config['hp_config']['context_limit'],
                               baseline= config['hp_config']['baseline'],
-                              rolling_mean_window=config['hp_config']['rolling_mean_window']
+                              rolling_mean_window=config['run_config']['rolling_mean_window']
                               )
         testset = prepper.make_features_and_targetpair()
         #test_data = CustomDataset(features_test, target_test, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
@@ -663,7 +663,7 @@ if __name__ == "__main__":
     #data_handler.load_data(save_as_csv=True)
     #data_handler = DataHandler("DataloaderTidepoolSAP100", r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data", dataset_name="Tidepool_SAP100")
     #data_handler.load_data(save_as_csv=True)
-    experiment_path = os.path.join('experiments','MeanFix')
+    experiment_path = os.path.join('experiments','LSTMtest')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'
