@@ -247,7 +247,11 @@ class EncoderModel(nn.Module):
 
 
     def forward(self, x_enc, x_mark_enc, attn_mask, apply_mask_tokens_fn=None, metadata=None):
-        enc_out = self.embed(x_enc, x_mark_enc)
+        # Clean -9 values by replacing with 0 (mean of normalized data)
+        # Completely missing tokens will be handled by apply_mask_tokens_fn anyway
+        x_enc_cleaned = torch.where(x_enc == -9, 0, x_enc)
+        
+        enc_out = self.embed(x_enc_cleaned, x_mark_enc)
         if apply_mask_tokens_fn is not None:
             enc_out = apply_mask_tokens_fn(x_enc, enc_out)
 
