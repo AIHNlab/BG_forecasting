@@ -83,7 +83,15 @@ class DataPrepper:
                 for i, feature in enumerate(self.feature_list):
                     if feature in df_participant.columns:
                         if self.rolling_mean_window is not None:
-                            df_participant[feature] = df_participant[feature].rolling(window=self.rolling_mean_window[i], min_periods=1).mean()
+                            #df_participant[feature] = df_participant[feature].rolling(window=self.rolling_mean_window[i], min_periods=1).mean()
+                            # Gaussian-weighted rolling mean
+                            #df_participant[feature] = df_participant[feature].rolling(window=self.rolling_mean_window[i], win_type='gaussian', min_periods=1).mean(std=1)
+                            df_participant[feature] = (
+                                                        df_participant[feature].fillna(0)
+                                                        .rolling(window=self.rolling_mean_window[i], win_type="gaussian", min_periods=1, center=True)
+                                                        .mean(std=2)              # SciPy required
+                                                        .replace(0, np.nan)         # convert exact 0s to NaN
+                                                    )
                 #df_participant = self.dataframes[participant]
                 # Convert DataFrames to NumPy arrays
                 features, targets = self._select_features_and_target(df_participant)
