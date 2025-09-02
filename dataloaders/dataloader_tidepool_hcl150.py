@@ -8,6 +8,30 @@ from dataloaders.dataloader import Dataloader
 from utils import calculate_total_cob, calculate_total_iob
 
 
+def shorten_patient_id(name, prefix_len=5, ignore_prefixes=('test_', 'train_')):
+    """Return shortened patient id: strip known prefixes then keep first prefix_len chars."""
+    base = os.path.basename(name)
+    # remove extension if present
+    base = os.path.splitext(base)[0]
+    for p in ignore_prefixes:
+        if base.startswith(p):
+            base = base[len(p):]
+            break
+    return base[:prefix_len]
+
+
+def unique_short_id(base_id, existing_set):
+    """Return a unique id based on base_id that is not in existing_set by appending -1, -2... if needed."""
+    #if base_id not in existing_set:
+    return base_id
+    #i = 1
+    #while True:
+    #    cand = f"{base_id}-{i}"
+    #    if cand not in existing_set:
+    #        return cand
+    #    i += 1
+
+
 class DataloaderTidepoolHCL150(Dataloader):
     def __init__(self, directory_path):
         super().__init__(directory_path)
@@ -15,24 +39,28 @@ class DataloaderTidepoolHCL150(Dataloader):
     def load_data(self):
         train_path = os.path.join(self.directory_path, "Tidepool-JDRF-HCL150-train", "train-data")
         train_files = glob(train_path + os.sep + "*.csv")
+
         for file in tqdm(train_files):
             if not os.path.isfile(file):
                 print(f"Missing train file: {file}")
                 continue
             df, patient_id = self._get_dataframe(file)
-            self.train_dataframes[patient_id] = df 
-            self.all_dataframes[patient_id] = df
+            # ensure unique shortened patient id across all dataframes
+            unique_id = unique_short_id(patient_id, set(self.all_dataframes.keys()))
+            self.train_dataframes[unique_id] = df 
+            self.all_dataframes[unique_id] = df
 
         test_path = os.path.join(self.directory_path, "Tidepool-JDRF-HCL150-test", "Tidepool-JDRF-HCL150-test","test-data")
         test_files = glob(test_path + os.sep + "*.csv")
-
+ 
         for file in tqdm(test_files):
             if not os.path.isfile(file):
                 print(f"Missing test file: {file}")
                 continue
             df, patient_id = self._get_dataframe(file)
-            self.test_dataframes[patient_id] = df 
-            self.all_dataframes[patient_id] = df
+            unique_id = unique_short_id(patient_id, set(self.all_dataframes.keys()))
+            self.test_dataframes[unique_id] = df 
+            self.all_dataframes[unique_id] = df
 
         return self.all_dataframes, self.train_dataframes, self.test_dataframes
 
@@ -114,8 +142,9 @@ class DataloaderTidepoolHCL150(Dataloader):
 
         # Iterate over the rows of the DataFrame
         for index, row in df.iterrows():
-            # Get the file name without the extension
-            file_name = row['file_name'].split('.')[0]
+            # Get the file name without the extension and shorten it
+            raw_name = row['file_name'].split('.')[0]
+            file_name = shorten_patient_id(raw_name)
 
             # Convert the row into a dictionary and store it in the metadata dictionary
             metadata[file_name] = row.to_dict()
@@ -125,7 +154,8 @@ class DataloaderTidepoolHCL150(Dataloader):
     
     def _get_dataframe(self, file, calculate_iob = True):
         dict={}
-        patient_id = file.split(os.sep)[-1].split('.')[0]
+        raw_patient_id = file.split(os.sep)[-1].split('.')[0]
+        patient_id = shorten_patient_id(raw_patient_id)
         print(patient_id)
         read_data_raw = pd.read_csv(file,
                                     usecols=[#'carbInput',  # carbohydrate input at pump calculation
