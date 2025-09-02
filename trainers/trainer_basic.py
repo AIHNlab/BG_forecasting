@@ -98,6 +98,15 @@ class TrainerBasic:
                 with open(summary_path, 'w', encoding='utf-8') as f:
                     summary_str = summary(self.model, input_size=(3, 224, 224))  # Adjust input_size as per your model's requirement
                     f.write(str(summary_str))
+                # Save the best validation loss (and epoch) to a file for later reference
+                best_loss_path = os.path.join(model_dir, 'best_val_loss.txt')
+                try:
+                    with open(best_loss_path, 'w', encoding='utf-8') as bf:
+                        bf.write(f"{best_val_loss}\n")
+                        bf.write(f"epoch:{epoch+1}\n")
+                except Exception:
+                    # Non-fatal: fail silently if we cannot write the best loss file
+                    pass
             else:
                 epochs_no_improve += 1
                 if epochs_no_improve == self.patience:
