@@ -22,18 +22,23 @@ class TidepoolLSTM(nn.Module):
         # LSTM Layer
         self.lstm = nn.LSTM(input_size=config['n_features'], hidden_size=config['hidden_dim'], num_layers=config['lstm_layers'], batch_first=True)
         
+        # First dense layer dimension is configurable, others are half of previous
+        dense_dim1 = config.get('first_dense_dim', config['hidden_dim']//2)  # Default to half of LSTM if not specified
+        dense_dim2 = dense_dim1 // 2
+        dense_dim3 = dense_dim2 // 2
+        
         # Fully connected layers with Batch Normalization and ReLU activation
-        self.fc1 = nn.Linear(config['hidden_dim'], config['hidden_dim']//2)
-        self.bn1 = nn.BatchNorm1d(config['hidden_dim']//2)
+        self.fc1 = nn.Linear(config['hidden_dim'], dense_dim1)
+        self.bn1 = nn.BatchNorm1d(dense_dim1)
         
-        self.fc2 = nn.Linear(config['hidden_dim']//2, config['hidden_dim']//4)
-        self.bn2 = nn.BatchNorm1d(config['hidden_dim']//4)
+        self.fc2 = nn.Linear(dense_dim1, dense_dim2)
+        self.bn2 = nn.BatchNorm1d(dense_dim2)
         
-        self.fc3 = nn.Linear(config['hidden_dim']//4, config['hidden_dim']//8)
-        self.bn3 = nn.BatchNorm1d(config['hidden_dim']//8)
+        self.fc3 = nn.Linear(dense_dim2, dense_dim3)
+        self.bn3 = nn.BatchNorm1d(dense_dim3)
         
         # Output layer
-        self.fc4 = nn.Linear(config['hidden_dim']//8, config['forecast_steps'])
+        self.fc4 = nn.Linear(dense_dim3, config['forecast_steps'])
     
     def forward(self, x):
         # LSTM layer
