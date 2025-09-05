@@ -5,40 +5,18 @@ import itertools
 import copy
 
 
-config = {
-    "hp_config": {
-        "batch_size": 32,
-        "num_epochs": 100,
-        "learning_rate": 1e-05,
-        "input_dim": 4,
-        "hidden_dim": 128,
-        "output_dim": 1,
-        "encoder_layers": 6,
-        "lstm_layers": 3,
-        "patch_size": 24,
-        "forecast_steps": 24,
-        "architecture": "TidepoolLSTM",
-        "token_size": 256,
-        "mask_ratio": 0.0,
-        "chance_feature_missing": 0.0,
-        "chance_of_smbg": 0.0,
-        "history_of_days": 0,
-        "hypoglycemia_threshold": 70,
-        "hyperglycemia_threshold": 180,
-        "context_limit": None,
-        "baseline": True,
-        "reconstruction": True,
-        "forecast_horizons": [6, 12, 24],
-        "feature_window": 2304,
-        "freeze_encoder": False,
-        "n_features": 3,
-        "n_targets": 1,
-        "lr_update_interval": 2500,
-        "lradj": "cosine_annealing_warmup",
-        "weight_decay": 0.0001,
-    },
-    "run_config": {
-        "experiment_path": "/experiments/LSTMTest",
+# load base config
+base_config = 'LstmHpSearch'
+experiment_path = os.path.join('experiments', base_config)
+#experiment_path = os.path.join('experiments','LinRegTest2H')
+
+model_config_path = experiment_path+os.sep+'model_config.json'
+config = json.load(open(model_config_path))
+
+# enforce which datasets/dataloaders to use together
+dataset_configs = {
+    # grouped mapping for all Glucobench sites
+    "all": {
         "dataset_names": [
             "AI4Food",
             "Glucobench_Colas",
@@ -52,7 +30,7 @@ config = {
             "Ohio2018",
             "Ohio2020",
             "T1DEXI",
-            "Tidepool_SAP100",
+            "Tidepool_SAP100"
         ],
         "dataloaders": [
             "DataloaderAI4Food",
@@ -67,33 +45,9 @@ config = {
             "DataloaderOhio",
             "DataloaderOhio",
             "DataloaderT1DEXI",
-            "DataloaderTidepoolSAP100",
+            "DataloaderTidepoolSAP100"
         ],
-        "indices_per_day": 288,
-        "features": ["cbg", "iob", "cob"],
-        "allowed_missing_values_rate": [1.0, 1.0, 1.0],
-        "targets": ["cbg", "iob", "cob"],
-        "allowed_missing_values_rate_target": [1.0, 1.0, 1.0],
-        "required_samples_window": 24,
-        "required_samples_during_test": [24, 0, 0],
-        "disabled_covariates": [0, 0, 0],
-        "fill_types": [0, 0, 0],
-        "rolling_mean_window": [1, 12, 12],
-        "test_target": "cbg",
-        "step_training": 10,
-        "train": False,
-        "test": True,
-        "train_participants": "all",
-        "test_participants": "all",
-        "parent_model_path": "/experiments/LSTMInitialTest/run_002_lr-0.0001_bs-64_fw-48_hd-256_ll-4_arch-TidepoolLSTM_ds-tidepool_sap100",
-        "trainer": "TrainerBasic",
-        "scaler": "StandardScaler",
     },
-}
-
-# enforce which datasets/dataloaders to use together
-dataset_configs = {
-    # grouped mapping for all Glucobench sites
     "glucobench": {
         "dataset_names": [
             "Glucobench_Colas",
@@ -169,16 +123,26 @@ dataset_configs = {
 
 
 # simple grid (add the params you want to sweep)
-param_grid = {
-    "learning_rate": [1e-4],
-    "batch_size": [64],
-    "feature_window": [48],
-    "hidden_dim": [256],
-    "lstm_layers": [4],
-    "architecture": ["TidepoolLSTM"],
-    "dataset_config": ["shanghai_t2dm"]
-    #"dataset_config": ["t1dexi", "tidepool_sap100", "ohio", "ai4food", "glucobench_colas", "glucobench_broll", "glucobench_hall", "glucobench_dubosson", "glucobench_weinstock", "shanghai_t1dm", "shanghai_t2dm", "tidepool_hcl150"]  # new: dataset configurations
-}
+if config["run_config"]["test"] and not config["run_config"]["train"]:
+    param_grid = {}
+else:
+    param_grid = {
+        "learning_rate": [1e-3,1e-4,1e-5],
+        "batch_size": [32],
+        "feature_window": [48,72,96],
+        "hidden_dim": [512,256,128],
+        "lstm_layers": [3,4,5],
+        "first_dense_dim": [512,256,128],
+        "dataset_config": ["all"],
+        #"dataset_config": ["ohio", "tidepool_hcl150", "tidepool_sap100", "t1dexi", "ai4food", "glucobench_colas", "glucobench_broll", "glucobench_hall", "glucobench_dubosson", "glucobench_weinstock", "shanghai_t1dm", "shanghai_t2dm"],  # new: dataset configurations
+        #"architecture": ["TidepoolLSTM"],
+        #"dataset_config": ["shanghai_t2dm"]
+    }
+
+param_grid.update({
+    
+    "architecture": ["TidepoolLSTM"]
+})
 
 # enforce which trainer to use for each architecture
 arch_to_trainer = {
@@ -186,7 +150,7 @@ arch_to_trainer = {
     "LinReg": "SciKitLinearRegressionModel"
 }
 
-base_experiment_dir = os.path.join("/experiments", "LSTMInitialTest")
+base_experiment_dir = os.path.join("/experiments", base_config)
 os.makedirs(base_experiment_dir, exist_ok=True)
 
 # short name mapping for hyperparameters to keep experiment folder names compact
@@ -197,7 +161,8 @@ hp_name_map = {
     'hidden_dim': 'hd',
     'lstm_layers': 'll',
     'architecture': 'arch',
-    'dataset_config': 'ds'
+    'dataset_config': 'ds',
+    'first_dense_dim': 'fd'
 }
 
 def safe_str(v):
