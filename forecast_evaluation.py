@@ -82,7 +82,10 @@ def evaluate_cg_ega_horizon(pred_horizon, actual_horizon, participant, horizon, 
     if plot_day is not None:
         evaluation_path = os.path.dirname(__file__)+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant), f'horizon_{horizon}')
         os.makedirs(evaluation_path, exist_ok=True)
-        cg_ega.plot(day=plot_day)
+        try:
+            cg_ega.plot(day=plot_day)
+        except Exception as e:
+            print(f"Warning: CG-EGA plot failed for participant {participant}, horizon {horizon}, day {plot_day}: {e}")
         plt.savefig(os.path.join(evaluation_path, f'cg_ega_day{plot_day}.png'))
         plt.close()
     return ap, be, ep
