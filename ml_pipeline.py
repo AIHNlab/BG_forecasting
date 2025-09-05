@@ -276,10 +276,13 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
             else:
                 # Filter the arrays using the mask
                 nan_mask = np.isnan(actual_horizon)
-                window = 24
+                # use configured window if present, otherwise default to 24
+                window = config['run_config'].get('required_samples_window', 24)
                 nan_window_mask = np.zeros_like(nan_mask, dtype=bool)
-                for i in range(window, len(nan_mask)):
-                    if np.any(nan_mask[i-window:i]):
+                # check previous `window` samples for NaNs for every index (handles start correctly)
+                for i in range(len(nan_mask)):
+                    start = max(0, i - window)
+                    if np.any(nan_mask[start:i]):
                         nan_window_mask[i] = True
                 final_mask = nan_mask | nan_window_mask
 
@@ -663,7 +666,7 @@ if __name__ == "__main__":
     #data_handler.load_data(save_as_csv=True)
     #data_handler = DataHandler("DataloaderTidepoolSAP100", r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data", dataset_name="Tidepool_SAP100")
     #data_handler.load_data(save_as_csv=True)
-    experiment_path = os.path.join('experiments','LSTMtest')
+    experiment_path = os.path.join('experiments','LSTMTest2')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'
