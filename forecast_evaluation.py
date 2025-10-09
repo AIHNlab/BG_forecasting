@@ -43,6 +43,7 @@ def plot_and_evaluate_horizon(pred_horizon, actual_horizon, std_horizon, partici
     # Calculate RMSE overall - only use valid (non-NaN) pairs
     valid_mask = ~np.isnan(actual_horizon) & ~np.isnan(pred_horizon)
     rmse = np.sqrt(np.mean((pred_horizon[valid_mask] - actual_horizon[valid_mask]) ** 2)) if np.any(valid_mask) else np.nan
+    mae = np.mean(np.abs(pred_horizon[valid_mask] - actual_horizon[valid_mask])) if np.any(valid_mask) else np.nan
 
     # Calculate RMSE for different glycemic ranges
     hypo_mask = (actual_horizon < hypo_threshold) & (~np.isnan(actual_horizon)) & (~np.isnan(pred_horizon))
@@ -58,11 +59,19 @@ def plot_and_evaluate_horizon(pred_horizon, actual_horizon, std_horizon, partici
     rmse_hyper = np.sqrt(np.mean((pred_horizon[hyper_mask] - actual_horizon[hyper_mask]) ** 2)) if np.any(hyper_mask) else np.nan
     rmse_normo = np.sqrt(np.mean((pred_horizon[normo_mask] - actual_horizon[normo_mask]) ** 2)) if np.any(normo_mask) else np.nan
 
+    mae_hypo = np.mean(np.abs(pred_horizon[hypo_mask] - actual_horizon[hypo_mask])) if np.any(hypo_mask) else np.nan
+    mae_hyper = np.mean(np.abs(pred_horizon[hyper_mask] - actual_horizon[hyper_mask])) if np.any(hyper_mask) else np.nan
+    mae_normo = np.mean(np.abs(pred_horizon[normo_mask] - actual_horizon[normo_mask])) if np.any(normo_mask) else np.nan
+
     return {
         "rmse": rmse,
         "rmse_hypo": rmse_hypo,
         "rmse_hyper": rmse_hyper,
-        "rmse_normo": rmse_normo
+        "rmse_normo": rmse_normo,
+        "mae": mae,
+        "mae_hypo": mae_hypo,
+        "mae_hyper": mae_hyper,
+        "mae_normo": mae_normo
     }
 
 def evaluate_cg_ega_horizon(pred_horizon, actual_horizon, participant, horizon, config, freq=5, plot_day=None):

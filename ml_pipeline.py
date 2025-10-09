@@ -132,7 +132,11 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
         [f'RMSE_{h}' for h in config['hp_config']['forecast_horizons']] +
         [f'RMSE_hypo_{h}' for h in config['hp_config']['forecast_horizons']] +
         [f'RMSE_hyper_{h}' for h in config['hp_config']['forecast_horizons']] +
-        [f'RMSE_normo_{h}' for h in config['hp_config']['forecast_horizons']]
+    [f'RMSE_normo_{h}' for h in config['hp_config']['forecast_horizons']] +
+    [f'MAE_{h}' for h in config['hp_config']['forecast_horizons']] +
+    [f'MAE_hypo_{h}' for h in config['hp_config']['forecast_horizons']] +
+    [f'MAE_hyper_{h}' for h in config['hp_config']['forecast_horizons']] +
+    [f'MAE_normo_{h}' for h in config['hp_config']['forecast_horizons']]
     )
     cg_ega_df = pd.DataFrame(columns=['Participant', 'Horizon', 'AP', 'BE', 'EP'])
     forecast_horizons = config['hp_config']['forecast_horizons']
@@ -299,6 +303,12 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
             rmse_values[f'RMSE_hypo_{horizon}'] = rmse["rmse_hypo"] if not pd.isna(rmse["rmse_hypo"]) else np.nan
             rmse_values[f'RMSE_hyper_{horizon}'] = rmse["rmse_hyper"] if not pd.isna(rmse["rmse_hyper"]) else np.nan  
             rmse_values[f'RMSE_normo_{horizon}'] = rmse["rmse_normo"] if not pd.isna(rmse["rmse_normo"]) else np.nan
+
+            # Also store MAE values returned by plot_and_evaluate_horizon (if present)
+            rmse_values[f'MAE_{horizon}'] = rmse.get("mae", np.nan) if not pd.isna(rmse.get("mae", np.nan)) else np.nan
+            rmse_values[f'MAE_hypo_{horizon}'] = rmse.get("mae_hypo", np.nan) if not pd.isna(rmse.get("mae_hypo", np.nan)) else np.nan
+            rmse_values[f'MAE_hyper_{horizon}'] = rmse.get("mae_hyper", np.nan) if not pd.isna(rmse.get("mae_hyper", np.nan)) else np.nan
+            rmse_values[f'MAE_normo_{horizon}'] = rmse.get("mae_normo", np.nan) if not pd.isna(rmse.get("mae_normo", np.nan)) else np.nan
 
             # --- CG-EGA per horizon ---
             ap, be, ep = evaluate_cg_ega_horizon(
@@ -552,8 +562,8 @@ def init_experiment_directory(config):
     os.makedirs(experiment_path, exist_ok=True)
     if config['run_config']['parent_model_path'] is not None:
         parent_model_path = os.path.dirname(__file__) + os.sep + config['run_config']['parent_model_path']
-        #shutil.copy2(os.path.join(parent_model_path, 'scaler_input.pkl'), os.path.join(experiment_path, 'scaler_input.pkl'))
-        #shutil.copy2(os.path.join(parent_model_path, 'scaler_target.pkl'), os.path.join(experiment_path, 'scaler_output.pkl'))
+        shutil.copy2(os.path.join(parent_model_path, 'scaler_input.pkl'), os.path.join(experiment_path, 'scaler_input.pkl'))
+        shutil.copy2(os.path.join(parent_model_path, 'scaler_target.pkl'), os.path.join(experiment_path, 'scaler_target.pkl'))
         shutil.copy2(os.path.join(parent_model_path, 'best_model.pth'), os.path.join(experiment_path, 'best_model.pth'))
     #dump config
     with open(experiment_path+os.sep+'model_config.json', 'w') as f:
@@ -666,7 +676,7 @@ if __name__ == "__main__":
     #data_handler.load_data(save_as_csv=True)
     #data_handler = DataHandler("DataloaderTidepoolSAP100", r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data", dataset_name="Tidepool_SAP100")
     #data_handler.load_data(save_as_csv=True)
-    experiment_path = os.path.join('experiments','LSTMTest2')
+    experiment_path = os.path.join('experiments','TestPC')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'
