@@ -13,6 +13,7 @@ from dataloaders.dataloader_merged import DataloaderMerged
 from dataloaders.dataloader_glucobench import DataloaderGlucobench
 from dataloaders.dataloader_shanghai import DataloaderShanghai
 from dataloaders.dataloader_ai4food import DataloaderAI4Food
+from dataloaders.dataloader_geneva import DataloaderGeneva
 
 
 class DataHandler:
@@ -123,7 +124,7 @@ if __name__ == "__main__":
     #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Ohio Data\Ohio_XML" ; data_handler = DataHandler("DataloaderOhio", dataset_path, dataset_name='Ohio2018')
     #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Ohio Data\Ohio2020_XML" ; data_handler = DataHandler("DataloaderOhio", dataset_path, dataset_name='Ohio2020')
     #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\T1DEXI" ; data_handler = DataHandler("DataloaderT1DEXI", dataset_path, dataset_name='T1DEXI')
-    #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data" ; data_handler = DataHandler("DataloaderTidepoolSAP100", dataset_path, dataset_name='Tidepool_SAP100')
+    #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data" ; data_handler = DataHandler("DataloaderTidepoolSAP100", dataset_path, dataset_name='Tidepool_SAP10')
     #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data" ; data_handler = DataHandler("DataloaderTidepoolHCL150", dataset_path, dataset_name='Tidepool_HCL150')
     #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Glucobench\colas" ; data_handler = DataHandler("DataloaderGlucobench", dataset_path, dataset_name='Glucobench_Colas')
     #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Glucobench\iglu" ; data_handler = DataHandler("DataloaderGlucobench", dataset_path, dataset_name='Glucobench_Broll')
@@ -134,5 +135,6 @@ if __name__ == "__main__":
     #data_handler.load_data(load_from_pkl = False, save_as_pkl=True, save_as_csv=True, reload_metadata=True)
     #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Shanghai\Shanghai_T1DM" ; data_handler = DataHandler("DataloaderShanghai", dataset_path, dataset_name='Shanghai_T1DM')
     #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Shanghai\Shanghai_T1DM" ; data_handler = DataHandler("DataloaderShanghai", dataset_path, dataset_name='Shanghai_T1DM')
-    dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\AI4FoodDB" ; data_handler = DataHandler("DataloaderAI4Food", dataset_path, dataset_name='AI4Food')
+    #dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\AI4FoodDB" ; data_handler = DataHandler("DataloaderAI4Food", dataset_path, dataset_name='AI4Food')
+    dataset_path = r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\FeasabilityStudy" ; data_handler = DataHandler("DataloaderGeneva", dataset_path, dataset_name='Geneva')
     data_handler.load_data(load_from_pkl = False, save_as_pkl=True, save_as_csv=True, reload_metadata=True)
