@@ -766,7 +766,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             print('Model loaded from:', self.model_path)
             # Validate baseline performance of the model
             #vali_loss, _ = self.vali(vali_data, vali_loader)
-            vali_loss, _, _, _, _ = self.vali(vali_data, vali_loader)
+            _, vali_loss, _, _, _ = self.vali(vali_data, vali_loader)
             early_stopping(vali_loss, self.model, path)
             if early_stopping.early_stop:
                 print("Early stopping")
@@ -907,7 +907,7 @@ class Exp_Long_Term_Forecast(Exp_Basic):
                 self.optimizers["variance"].step()
 
             print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
-            train_loss = np.average(train_loss)
+            train_loss = np.average(forecast_det_losses)
             forecast_losses = np.average(forecast_losses)
             #writer.add_scalar('Loss/train', loss.item(), epoch * len(train_loader) + i)
             #writer.add_scalar('Loss/train', train_loss, epoch)
@@ -922,8 +922,8 @@ class Exp_Long_Term_Forecast(Exp_Basic):
             #test_loss = self.vali(test_data, test_loader, criterion)
 
             print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
-                epoch + 1, train_steps, train_loss, vali_loss, 0))
-            early_stopping(vali_loss, self.model, path)
+                epoch + 1, train_steps, train_loss, vali_loss_target, 0))
+            early_stopping(vali_loss_target, self.model, path)
             if early_stopping.early_stop:
                 print("Early stopping")
                 break
