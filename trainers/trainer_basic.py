@@ -27,15 +27,29 @@ class TrainerBasic:
         self.retrain_model = retrain_model
 
     def validate(self, val_loader):
-        self.model.eval() 
-        val_loss = 0
+        self.model.eval()
+        val_loss_sum = 0.0
+        valid_batches = 0
         with torch.no_grad():
             for data, targets in val_loader:
                 data, targets = data.to(self.device), targets.to(self.device)
                 outputs = self.model(data)
-                loss = self.criterion(outputs, targets)
-                val_loss += loss.item()
-        return val_loss / len(val_loader)
+                # Apply same valid mask used during training: ignore targets marked with -8 or -9
+                valid_mask = (targets != -8) & (targets != -9)
+                # If there are no valid elements in this batch, skip it
+                if valid_mask.sum() == 0:
+                    continue
+                masked_outputs = outputs[valid_mask]
+                masked_targets = targets[valid_mask]
+                loss = self.criterion(masked_outputs, masked_targets)
+                val_loss_sum += loss.item()
+                valid_batches += 1
+
+        if valid_batches == 0:
+            # No valid targets in validation set; return a large value so this won't be considered best
+            return float('inf')
+
+        return val_loss_sum / valid_batches
 
     def train(self,train_loader, val_loader):
         if self.retrain_model == False:
