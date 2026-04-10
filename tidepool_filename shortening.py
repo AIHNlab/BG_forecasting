@@ -124,4 +124,65 @@ def shorten_filenames(folder_path, prefix_len=5, ignore_prefix="train_", dry_run
     print(f"Renamed {len(temp_map)} files in '{folder_path}'.")
     return mapping
 
-shorten_filenames(folder, prefix_len=5, ignore_prefix="train_", dry_run=False)
+#shorten_filenames(folder, prefix_len=5, ignore_prefix="train_", dry_run=False)
+
+
+def shorten_metadata_keys(metadata_path, prefix_len=5, ignore_prefix="train_", out_path=None, backup=True):
+    """Shorten keys in a metadata JSON file by keeping only `prefix_len` chars after `ignore_prefix`.
+
+    - Only keys that start with `ignore_prefix` are changed.
+    - Preserves file extension if present (e.g., .csv).
+    - Ensures uniqueness by appending -1, -2... when collisions occur.
+    - Creates a backup (.bak) when overwriting the original file.
+
+    Returns a dict mapping old_key -> new_key for changed keys.
+    """
+    import json
+    import shutil
+
+    if out_path is None:
+        out_path = metadata_path
+
+    with open(metadata_path, 'r', encoding='utf-8') as f:
+        meta = json.load(f)
+
+    new_meta = {}
+    mapping = {}
+    used_targets = set()
+
+    for old_key, value in meta.items():
+        if not old_key.startswith(ignore_prefix):
+            # leave unchanged
+            new_meta[old_key] = value
+            used_targets.add(old_key)
+            continue
+
+        name, ext = os.path.splitext(old_key)
+        stripped = name[len(ignore_prefix):]
+        prefix = stripped[:prefix_len]
+        base_target = f"{ignore_prefix}{prefix}{ext}"
+
+        target = base_target
+        i = 1
+        # if already used, append suffix
+        while target in used_targets:
+            # if base_target already has '-n' pattern, we still add -i
+            target = f"{os.path.splitext(base_target)[0]}-{i}{ext}"
+            i += 1
+
+        new_meta[target] = value
+        mapping[old_key] = target
+        used_targets.add(target)
+
+    # backup original
+    if backup and out_path == metadata_path:
+        bak_path = metadata_path + '.bak'
+        shutil.copy2(metadata_path, bak_path)
+
+    with open(out_path, 'w', encoding='utf-8') as f:
+        json.dump(new_meta, f, indent=2)
+
+    print(f"Converted {len(mapping)} metadata keys; wrote updated metadata to {out_path}")
+    return mapping
+
+shorten_metadata_keys(r'C:\Users\knutj\Code\BG_forecasting\standardized_datasets\Tidepool_HCL150\test_metadata.json', prefix_len=5, ignore_prefix='test_', out_path=None, backup=False)
