@@ -3,6 +3,7 @@
 *.pyc
 *.pth
 *.png
+*.xlsx
 *metadata.json
 *logs
 *.lprof
@@ -10,13 +11,3 @@
 *.txt
 *events.out*
 .venv*
-!/standardized_datasets/Ohio2018/
-!/standardized_datasets/Ohio2018/**
-!/standardized_datasets/Ohio2018/**/*.csv
-!/standardized_datasets/Ohio2018/**/*.pkl
-!/standardized_datasets/Ohio2018/**/*.json
-!/standardized_datasets/Ohio2020/
-!/standardized_datasets/Ohio2020/**
-!/standardized_datasets/Ohio2020/**/*.csv
-!/standardized_datasets/Ohio2020/**/*.pkl
-!/standardized_datasets/Ohio2020/**/*.json
