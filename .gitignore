@@ -4,6 +4,9 @@
 *.pth
 *.png
 *.xlsx
+*.zip
+*.log
+*.lnk
 *metadata.json
 *logs
 *.lprof
