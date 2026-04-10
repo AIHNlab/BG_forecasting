@@ -4,6 +4,8 @@ from scipy.ndimage import label
 import numpy as np
 import os
 import json
+from sklearn.calibration import calibration_curve
+from sklearn.metrics import brier_score_loss, log_loss
 
 def compute_event_level_metrics(true_binary, pred_binary, sampling_interval=5, match_window_min=60):
 
@@ -118,7 +120,7 @@ def run_evaluation(actuals, hyper_probs, hypo_probs, participant, config, thresh
     if hyper_probs is None or hypo_probs is None:
         return
 
-    evaluation_path = os.path.dirname(__file__) + os.path.join(
+    evaluation_path = os.path.dirname(__file__) + os.sep + os.path.join(
         config['run_config']['experiment_path'], 'evaluation', str(participant), f'alarms_threshold_{threshold}'
     )
     os.makedirs(evaluation_path, exist_ok=True)
@@ -236,3 +238,198 @@ def run_evaluation(actuals, hyper_probs, hypo_probs, participant, config, thresh
         'hyper': metrics_hyper,
         'hypo': metrics_hypo
     }
+
+
+def compute_calibration_curve(y_true, y_prob, n_bins=10, strategy='uniform'):
+    """
+    Compute calibration curve data.
+    
+    Args:
+        y_true: Binary array of true event occurrences (0 or 1)
+        y_prob: Array of predicted probabilities (0 to 1)
+        n_bins: Number of bins for calibration curve
+        strategy: 'uniform' or 'quantile' binning strategy
+    
+    Returns:
+        Dictionary with calibration metrics and curve data
+    """
+    # Remove NaN values
+    mask = ~(np.isnan(y_true) | np.isnan(y_prob))
+    y_true = y_true[mask]
+    y_prob = y_prob[mask]
+    
+    if len(y_true) == 0:
+        return None
+    
+    # Compute calibration curve using sklearn
+    fraction_of_positives, mean_predicted_value = calibration_curve(
+        y_true, y_prob, n_bins=n_bins, strategy=strategy
+    )
+    
+    # Compute calibration metrics
+    brier_score = brier_score_loss(y_true, y_prob)
+    
+    # Expected Calibration Error (ECE)
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+    bin_counts = []
+    
+    for i in range(n_bins):
+        bin_mask = (y_prob >= bin_edges[i]) & (y_prob < bin_edges[i + 1])
+        if i == n_bins - 1:  # Last bin includes right edge
+            bin_mask = (y_prob >= bin_edges[i]) & (y_prob <= bin_edges[i + 1])
+        
+        bin_count = np.sum(bin_mask)
+        bin_counts.append(int(bin_count))  # Convert to Python int
+        
+        if bin_count > 0:
+            bin_accuracy = np.mean(y_true[bin_mask])
+            bin_confidence = np.mean(y_prob[bin_mask])
+            ece += (bin_count / len(y_true)) * np.abs(bin_accuracy - bin_confidence)
+    
+    # Maximum Calibration Error (MCE)
+    mce = 0.0
+    for i in range(len(fraction_of_positives)):
+        mce = max(mce, np.abs(fraction_of_positives[i] - mean_predicted_value[i]))
+    
+    # Log loss (cross-entropy)
+    try:
+        logloss = log_loss(y_true, y_prob)
+    except:
+        logloss = None
+    
+    return {
+        'fraction_of_positives': fraction_of_positives.tolist(),
+        'mean_predicted_value': mean_predicted_value.tolist(),
+        'bin_counts': bin_counts,
+        'brier_score': float(brier_score),
+        'expected_calibration_error': float(ece),
+        'maximum_calibration_error': float(mce),
+        'log_loss': float(logloss) if logloss is not None else None,
+        'n_samples': int(len(y_true)),
+        'n_positive': int(np.sum(y_true)),
+        'positive_rate': float(np.mean(y_true))
+    }
+
+
+def plot_calibration_curve(calibration_data, event_type='hyperglycemia', save_path=None, show_distribution=True):
+    """
+    Plot calibration (reliability) curve.
+    
+    Args:
+        calibration_data: Dictionary from compute_calibration_curve
+        event_type: 'hyperglycemia' or 'hypoglycemia'
+        save_path: Path to save the figure (optional)
+        show_distribution: If True, shows sample distribution histogram (default: True)
+    """
+    if calibration_data is None:
+        print(f"No calibration data available for {event_type}")
+        return
+    
+    fig, ax = plt.subplots(figsize=(10, 10))
+    
+    # Plot calibration curve
+    ax.plot(
+        calibration_data['mean_predicted_value'],
+        calibration_data['fraction_of_positives'],
+        marker='o',
+        linewidth=2,
+        markersize=8,
+        label=f'{event_type.capitalize()} Calibration'
+    )
+    
+    # Plot perfect calibration line
+    ax.plot([0, 1], [0, 1], 'k--', linewidth=2, label='Perfect Calibration')
+    
+    # Conditionally add histogram of predictions as bars
+    if show_distribution:
+        ax2 = ax.twinx()
+        bin_edges = np.linspace(0, 1, len(calibration_data['bin_counts']) + 1)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        ax2.bar(
+            bin_centers,
+            calibration_data['bin_counts'],
+            width=1.0/len(calibration_data['bin_counts']),
+            alpha=0.3,
+            color='gray',
+            label='Sample Distribution'
+        )
+        ax2.set_ylabel('Count', fontsize=12)
+    
+    # Labels and title
+    ax.set_xlabel('Mean Predicted Probability', fontsize=14)
+    ax.set_ylabel('Fraction of Positives (Actual)', fontsize=14)
+    ax.set_title(f'Calibration Curve - {event_type.capitalize()}', fontsize=16, fontweight='bold')
+    
+    # Add metrics text box
+    metrics_text = (
+        f"Brier Score: {calibration_data['brier_score']:.4f}\n"
+        f"ECE: {calibration_data['expected_calibration_error']:.4f}\n"
+        f"MCE: {calibration_data['maximum_calibration_error']:.4f}\n"
+        f"Samples: {calibration_data['n_samples']}\n"
+        f"Events: {calibration_data['n_positive']} ({calibration_data['positive_rate']*100:.2f}%)"
+    )
+    
+    if calibration_data['log_loss'] is not None:
+        metrics_text += f"\nLog Loss: {calibration_data['log_loss']:.4f}"
+    
+    #ax.text(
+    #    0.05, 0.95,
+    #    metrics_text,
+    #    transform=ax.transAxes,
+    #    fontsize=11,
+    #    verticalalignment='top',
+    #    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+    #)
+    
+    # Grid and legend
+    ax.grid(True, alpha=0.3)
+    ax.set_xlim([0, 1])
+    ax.set_ylim([0, 1])
+    
+    # Combine legends
+    if show_distribution:
+        lines1, labels1 = ax.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax.legend(lines1 + lines2, labels1 + labels2, loc='lower right', fontsize=11)
+    else:
+        ax.legend(loc='lower right', fontsize=11)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Calibration curve saved to: {save_path}")
+    
+    plt.close(fig)
+
+
+def aggregate_calibration_data(all_participants_data, event_type='hyper'):
+    """
+    Aggregate calibration data across all participants.
+    
+    Args:
+        all_participants_data: List of tuples (y_true, y_prob) for each participant
+        event_type: 'hyper' or 'hypo'
+    
+    Returns:
+        Aggregated y_true and y_prob arrays
+    """
+    all_y_true = []
+    all_y_prob = []
+    
+    for y_true, y_prob in all_participants_data:
+        if y_true is not None and y_prob is not None:
+            # Remove NaN values
+            mask = ~(np.isnan(y_true) | np.isnan(y_prob))
+            all_y_true.append(y_true[mask])
+            all_y_prob.append(y_prob[mask])
+    
+    if len(all_y_true) == 0:
+        return None, None
+    
+    # Concatenate all participants
+    all_y_true = np.concatenate(all_y_true)
+    all_y_prob = np.concatenate(all_y_prob)
+    
+    return all_y_true, all_y_prob

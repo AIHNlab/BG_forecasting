@@ -1,5 +1,5 @@
 from dataprepper import DataPrepper
-from architectures.mirshekarian_lstm import MirshekarianLSTM
+from architectures.lstms import MirshekarianLSTM
 from trainers.trainer_basic import TrainerBasic
 from evaluator import Evaluator
 

@@ -177,7 +177,10 @@ class SequenceDataset(Dataset):
         if self.disabled_covariates:
             for i, disabled in enumerate(self.disabled_covariates):
                 if disabled == 1 and i < sequence.shape[1]:
-                    sequence[:, i] = -9
+                    if self.baseline:
+                        sequence[:, i] = 0
+                    else:
+                        sequence[:, i] = -9
                     #target[:, i] = -9
         
         # Set the non-cgm target values to -9 here to not predict covariates
@@ -189,7 +192,10 @@ class SequenceDataset(Dataset):
         if self.context_limit is not None and self.context_limit > 0:
             keep_steps = self.forecast_steps + self.context_limit
             if sequence.shape[0] > keep_steps:
-                sequence[:-keep_steps, :] = -9
+                if self.baseline:
+                    sequence[:-keep_steps, :] = 0
+                else:
+                    sequence[:-keep_steps, :] = -9
                 target[:-keep_steps, :] = -9       
 
         # reshape to patch_size

@@ -37,7 +37,11 @@ class DataloaderTidepoolSAP100(Dataloader):
     def load_data(self):
         train_path = os.path.join(self.directory_path, "Tidepool-JDRF-SAP100-train", "train-data")
         train_files = glob(train_path + os.sep + "*.csv")
+        included_patient_ids = ["ba7f6", "f086c", "54dae", "5a797", "dbcb6", "99454", "baf43", "37603", "f9450", "8103e"]
         for file in tqdm(train_files):
+            short_patient_id =  shorten_patient_id(os.path.basename(file).split('.')[-2] if '.' in os.path.basename(file) else os.path.basename(file))
+            if short_patient_id not in included_patient_ids:
+                continue
             df, patient_id = self._get_dataframe(file)
             # ensure unique shortened patient id across all dataframes
             unique_id = unique_short_id(patient_id, set(self.all_dataframes.keys()))
@@ -48,6 +52,9 @@ class DataloaderTidepoolSAP100(Dataloader):
         test_files = glob(test_path + os.sep + "*.csv")
 
         for file in tqdm(test_files):
+            short_patient_id =  shorten_patient_id(os.path.basename(file).split('.')[-2] if '.' in os.path.basename(file) else os.path.basename(file))
+            if short_patient_id not in included_patient_ids:
+                continue
             df, patient_id = self._get_dataframe(file)
             unique_id = unique_short_id(patient_id, set(self.all_dataframes.keys()))
             self.test_dataframes[unique_id] = df 

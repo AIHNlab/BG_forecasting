@@ -147,3 +147,53 @@ def calculate_total_cob(time_series, carb_absorption, ts_min, t_action_max_min):
 
 def apply_moving_average(series, window_size):
     return pd.Series(series).rolling(window=window_size, min_periods=1).mean().to_numpy()
+
+def get_thresholded_events(predictions, hyper_thresh=180, hypo_thresh=70):
+    # Build baseline alarm probabilities from forecasts:
+    # For each sample i, look at the first 12 forecast steps (1 hour). If there is any run
+    # of 3 consecutive predicted values within that window that are > hyper threshold -> alarm=1.
+    # Similarly for hypo (< hypo threshold). Otherwise alarm=0.
+    #try:
+    #    hyper_thresh = prepper.hyperglycemia_threshold
+    #    hypo_thresh = prepper.hypoglycemia_threshold
+    #except Exception:
+        # fallback to typical defaults if prepper doesn't expose thresholds
+    # Ensure predictions shape is (N, H, C) and create per-sample binary probabilities
+    preds = np.array(predictions)
+    n_samples = preds.shape[0]
+    hyper_probs = np.zeros(n_samples, dtype=float)
+    hypo_probs = np.zeros(n_samples, dtype=float)
+
+    # Window length in forecast steps corresponding to 1 hour (12 timesteps)
+    horizon_window = min(12, preds.shape[1]) if preds.ndim >= 2 else 12
+
+    for i in range(n_samples):
+        # Extract first `horizon_window` forecasted values and flatten
+        if preds.ndim == 3:
+            window_vals = preds[i, :horizon_window, :].reshape(-1)
+        elif preds.ndim == 2:
+            window_vals = preds[i, :horizon_window].reshape(-1)
+        else:
+            # Unexpected shape - skip
+            continue
+
+        # Treat NaNs as non-events
+        valid_mask = ~np.isnan(window_vals)
+        if valid_mask.sum() == 0:
+            continue
+
+        hyper_mask = valid_mask & (window_vals > hyper_thresh)
+        hypo_mask = valid_mask & (window_vals < hypo_thresh)
+
+        # Check for any run of 3 consecutive True values
+        if len(hyper_mask) >= 3:
+            conv = np.convolve(hyper_mask.astype(int), np.ones(3, dtype=int), mode='valid')
+            if np.any(conv >= 3):
+                hyper_probs[i] = 1.0
+
+        if len(hypo_mask) >= 3:
+            conv = np.convolve(hypo_mask.astype(int), np.ones(3, dtype=int), mode='valid')
+            if np.any(conv >= 3):
+                hypo_probs[i] = 1.0
+    
+    return hyper_probs, hypo_probs

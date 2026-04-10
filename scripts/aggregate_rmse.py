@@ -7,13 +7,13 @@ from collections import defaultdict, OrderedDict
 
 # Set TEST_FOLDER to the experiment subfolder to aggregate (e.g. 'FinalLinReg').
 # If an argument is provided on the command line it will override this value.
-TEST_FOLDER = "Geneva"#'FinalResultsFolder'
+TEST_FOLDER = "LstmBigRobustness"#'FinalResultsFolder'#"LstmBigRobustness"#"Geneva"
 if len(sys.argv) > 1 and sys.argv[1].strip():
     TEST_FOLDER = sys.argv[1].strip()
 
 # Optional second argument: comma-separated tag order, e.g. "2304,888,312,96"
-ORDER_TAGS = ["Transformer","BestHpLstm","LstmBig","LinReg"]
-#ORDER_TAGS = ["2304,888,312,96"]
+#ORDER_TAGS = ["Transformer", "SmallTransformer","SmallTransformerNoMetadata","BestHpLstm","LstmBig","LinReg"]
+ORDER_TAGS = ["2304,888,312,96"]
 if len(sys.argv) > 2 and sys.argv[2].strip():
     ORDER_TAGS = [t.strip() for t in sys.argv[2].split(',') if t.strip()]
 

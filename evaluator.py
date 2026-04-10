@@ -14,8 +14,8 @@ class Evaluator:
             for data, targets in self.test_loader:
                 data, targets = data.to(device), targets.to(device)
                 outputs = self.model(data)
-                predictions.extend(outputs.cpu().numpy())
-                actuals.extend(targets.cpu().numpy())
+                predictions.extend(outputs[6].cpu().numpy())
+                actuals.extend(targets[6].cpu().numpy())
 
         #fig = plt.figure(figsize=(10, 5))
         #plt.plot(actuals, label='Actuals', linestyle='-', linewidth=2, color='blue', alpha=0.7)

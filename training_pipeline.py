@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from dataprepper import DataPrepper
-from architectures.mirshekarian_lstm import MirshekarianLSTM
+from architectures.lstms import MirshekarianLSTM
 from trainers.trainer_basic import TrainerBasic
 from datahandler import DataHandler
 from dataloaders.dataloader_tidepool_sap100 import Dataloader
@@ -105,8 +105,9 @@ def main(config, train, evaluate):
         rmses = []
         for participant in participants:
             test_participants = [participant]
-            model_path = os.path.join('models', "Tidepool_SAP100",'testing', str(config['forecast_steps']), f'testing.pth')
+            #model_path = os.path.join('models', "Tidepool_SAP100",'testing', str(config['forecast_steps']), f'testing.pth')
             #model_path=os.path.join('models', data_handler.get_dataset_name(), 'testing', str(config['forecast_steps']), f'testing.pth')
+            model_path=os.path.join('models', 'Ohio2018', 'testing', str(config['forecast_steps']), f'testing.pth')
             predictions, actuals, rmse = evaluate_model_for_programming_task(
                 data_handler=data_handler,
                 forecast_steps=config['forecast_steps'],
@@ -138,6 +139,9 @@ if __name__ == "__main__":
         'scaler': StandardScaler(),
         'dataloader': "DataloaderOhio",
         'dataset_name': 'Ohio2018',
+        #'dataloader': "DataloaderTidepoolSAP100",
+        #'dataset_name': 'Tidepool_SAP100',
+        
 
     }
     #main(config, train=True, evaluate=False)

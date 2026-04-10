@@ -17,7 +17,7 @@ def plot_and_evaluate_horizon(pred_horizon, actual_horizon, std_horizon, partici
     """
     
     # Save plot to a file with confidence intervals
-    evaluation_path = os.path.dirname(__file__)+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant), f'horizon_{horizon}')
+    evaluation_path = os.path.dirname(__file__)+os.sep+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant), f'horizon_{horizon}')
     os.makedirs(evaluation_path, exist_ok=True)
     fig = plt.figure(figsize=(25, 5))
 
@@ -89,7 +89,7 @@ def evaluate_cg_ega_horizon(pred_horizon, actual_horizon, participant, horizon, 
     ap, be, ep = cg_ega.reduced()
     print(f"Participant {participant} - Horizon {horizon} CG-EGA: AP={ap:.3f}, BE={be:.3f}, EP={ep:.3f}")
     if plot_day is not None:
-        evaluation_path = os.path.dirname(__file__)+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant), f'horizon_{horizon}')
+        evaluation_path = os.path.dirname(__file__)+os.sep+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant), f'horizon_{horizon}')
         os.makedirs(evaluation_path, exist_ok=True)
         try:
             cg_ega.plot(day=plot_day)
@@ -142,7 +142,7 @@ def evaluate_uncertainty_calibration(y_true, mu, sigma, participant, horizon, co
         ax[1].grid(True)
 
         plt.tight_layout()
-        evaluation_path = os.path.dirname(__file__)+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant), f'horizon_{horizon}')
+        evaluation_path = os.path.dirname(__file__)+os.sep+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant), f'horizon_{horizon}')
         os.makedirs(os.path.dirname(evaluation_path), exist_ok=True)
         plt.savefig(evaluation_path + '/calibration_plot.png')
         plt.close()

@@ -6,7 +6,7 @@ import copy
 
 
 # load base config
-base_config = 'BestHpLstm'
+base_config = 'SmallTransformerNoMetadata'
 experiment_path = os.path.join('experiments', base_config)
 #experiment_path = os.path.join('experiments','LinRegTest2H')
 
@@ -144,7 +144,7 @@ else:
 
 # add an optional user-provided model tag (keeps backward compatibility when empty)
 param_grid.update({
-    "model_tag": ["BestHpLstm"]
+    "model_tag": ["SmallTransformerNoMetadata"]
 })
 
 

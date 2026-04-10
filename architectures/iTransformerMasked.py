@@ -142,6 +142,7 @@ class EncoderModel(nn.Module):
         self.n_features = configs.n_features
         self.embed = DataEmbedding_inverted(self.seq_len, configs.d_model, configs.embed, configs.freq, configs.dropout)
         self.positional_encoding = PositionalEncoding(configs.d_model)
+        self.include_metadata = configs.include_metadata
         #self.periodicity_reshape = PeriodicityReshape(self.main_cycle)
         self.encoder = Encoder(
             [
@@ -265,7 +266,10 @@ class EncoderModel(nn.Module):
         enc_out = torch.cat(encoded_parts, dim=1)
 
         # Embed metadata
-        embedded_metadata = self.embed_metadata(metadata, batch_size=x_enc.shape[0])
+        if self.include_metadata:
+            embedded_metadata = self.embed_metadata(metadata, batch_size=x_enc.shape[0])
+        else:
+            embedded_metadata = self.embed_metadata(None, batch_size=x_enc.shape[0])
         if embedded_metadata is not None:
             # Append metadata as an additional time step
             enc_out = torch.cat((enc_out, embedded_metadata), dim=1)
@@ -386,8 +390,8 @@ class Model(nn.Module):
             dec_out_variance = dec_out_variance * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
             dec_out_variance = dec_out_variance + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
         #if random.randint(1, 100) == 1:
-        if self.iter_count % 5000 == 0:
-            self.plot_attention(x_enc, enc_out, attns, dec_out_reconstruction)
+        #if self.iter_count % 5000 == 0:
+        #    self.plot_attention(x_enc, enc_out, attns, dec_out_reconstruction)
         return dec_out_reconstruction, dec_out_forecast, dec_out_mean, dec_out_variance, dec_out_hyperglycemia, dec_out_hypoglycemia
 
     def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None,return_variance=False, metadata=None):

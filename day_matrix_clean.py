@@ -8,7 +8,7 @@ from scipy.interpolate import griddata
 TS_MIN = 5
 T_ACTION_MAX_MIN_INSULIN = 240
 T_ACTION_MAX_MIN_CARB = 240
-MOVING_AVG_WINDOW_SIZE = 12
+MOVING_AVG_WINDOW_SIZE = 1
 CARB_ABSORPTION = 0.8
 
 # Insulin calculations

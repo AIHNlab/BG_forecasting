@@ -6,17 +6,19 @@ import copy
 
 
 # load base config
-base_config = 'Robustness'
+base_config = 'LstmBigRobustness'
 experiment_path = os.path.join('experiments', base_config)
 #experiment_path = os.path.join('experiments','LinRegTest2H')
 
 model_config_path = experiment_path+os.sep+'model_config.json'
 config = json.load(open(model_config_path))
 
-disabled_covariates = [[0,0,0], [0,0,1], [0,1,0], [0,1,1]]
+#disabled_covariates = [[0,0,0], [0,0,1], [0,1,0], [0,1,1]]
+disabled_covariates = [[0,0,0]]
 
-#context_limit = [96, 312, 456, 2304]
-context_limit = [96, 312, 888]
+context_limit = [456, 312, 96, 2304]#[96, 312, 456, 2304]
+#context_limit = [96, 312, 888]
+#context_limit = [None]
 
 def safe_str(v):
 	"""Return a filesystem-safe string for a hyperparameter value while preserving readability."""

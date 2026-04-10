@@ -18,6 +18,73 @@ import io
 import PIL
 from torchvision.transforms import ToTensor
 import torch.nn.functional as F
+import json
+
+class HistogramCalibrator:
+    """
+    Simple histogram binning recalibration using pre-computed calibration curves.
+    """
+    def __init__(self, calibration_json_path):
+        """
+        Args:
+            calibration_json_path: Path to the calibration JSON file
+        """
+        self.calibration_data = None
+        self.bin_edges = None
+        self.calibrated_probs = None
+        
+        if calibration_json_path and os.path.exists(calibration_json_path):
+            with open(calibration_json_path, 'r') as f:
+                self.calibration_data = json.load(f)
+            self._build_mapping()
+    
+    def _build_mapping(self):
+        """Build the histogram binning mapping from calibration data."""
+        if self.calibration_data is None:
+            return
+        
+        # Extract calibration curve data
+        mean_predicted = np.array(self.calibration_data['mean_predicted_value'])
+        fraction_positive = np.array(self.calibration_data['fraction_of_positives'])
+        
+        # Create bin edges (n_bins + 1 edges for n_bins bins)
+        n_bins = len(mean_predicted)
+        self.bin_edges = np.linspace(0, 1, n_bins + 1)
+        
+        # Store calibrated probabilities for each bin
+        self.calibrated_probs = fraction_positive
+    
+    def calibrate(self, probs):
+        """
+        Apply histogram binning recalibration.
+        
+        Args:
+            probs: Array of predicted probabilities (any shape)
+        
+        Returns:
+            Calibrated probabilities (same shape as input)
+        """
+        if self.calibration_data is None:
+            # No calibration data, return original probabilities
+            return probs
+        
+        original_shape = probs.shape
+        probs_flat = probs.flatten()
+        
+        # Clip probabilities to [0, 1]
+        probs_flat = np.clip(probs_flat, 0, 1)
+        
+        # Find which bin each probability belongs to
+        bin_indices = np.digitize(probs_flat, self.bin_edges) - 1
+        
+        # Handle edge cases
+        bin_indices = np.clip(bin_indices, 0, len(self.calibrated_probs) - 1)
+        
+        # Map to calibrated probabilities
+        calibrated_flat = self.calibrated_probs[bin_indices]
+        
+        # Reshape back to original shape
+        return calibrated_flat.reshape(original_shape)
 
 class PeriodicityReshape(nn.Module):
     def __init__(self, main_cycle):
@@ -254,6 +321,7 @@ class Args:
         self.forecast_steps = hp_config['forecast_steps']
         self.forecast_horizons = hp_config['forecast_horizons']
         self.reconstruction = hp_config['reconstruction'] # True if we want to reconstruct the input sequence
+        self.include_metadata = hp_config.get('include_metadata', True)
         self.d_layers = 1 # Interesting to add to hp_config
         self.d_ff = 2048 # Interesting to add to hp_config
         self.moving_avg = 25 # Don't think this is used for iTransformer
@@ -321,7 +389,50 @@ class Exp_Long_Term_Forecast(Exp_Basic):
         self.criterion_alarm = nn.CrossEntropyLoss()
         self.criterion_uncertainty = nn.GaussianNLLLoss(reduction='none')
         self.periodicity_reshape = PeriodicityReshape(main_cycle=args.patch_size)
+        
+        # Initialize calibrators from config
+        self.hyper_calibrator = None
+        self.hypo_calibrator = None
+        self._load_calibrators(hp_config)
+        
         super(Exp_Long_Term_Forecast, self).__init__(args)
+    
+    def _load_calibrators(self, hp_config):
+        """
+        Load calibration mappings from JSON files if specified in config.
+        
+        Expected config structure:
+        {
+            "run_config": {
+                "alarm_calibration": {
+                    "enabled": true,
+                    "hyperglycemia_path": "path/to/alarm_calibration_metrics_hyperglycemia.json",
+                    "hypoglycemia_path": "path/to/alarm_calibration_metrics_hypoglycemia.json"
+                }
+            }
+        }
+        """
+        # Check if calibration is enabled in config
+        calibration_config = hp_config.get('alarm_calibration', {})
+        if not calibration_config.get('enabled', False):
+            print("Alarm recalibration: Disabled")
+            return
+        
+        # Load hyperglycemia calibrator
+        hyper_path = calibration_config.get('hyperglycemia_path', None)
+        if hyper_path and os.path.exists(hyper_path):
+            self.hyper_calibrator = HistogramCalibrator(hyper_path)
+            print(f"Loaded hyperglycemia calibrator from: {hyper_path}")
+        else:
+            print(f"Hyperglycemia calibration file not found: {hyper_path}")
+        
+        # Load hypoglycemia calibrator
+        hypo_path = calibration_config.get('hypoglycemia_path', None)
+        if hypo_path and os.path.exists(hypo_path):
+            self.hypo_calibrator = HistogramCalibrator(hypo_path)
+            print(f"Loaded hypoglycemia calibrator from: {hypo_path}")
+        else:
+            print(f"Hypoglycemia calibration file not found: {hypo_path}")
 
     def _build_model(self):
         model = self.model_dict[self.args.model].Model(self.args).float()
@@ -1015,6 +1126,13 @@ class Exp_Long_Term_Forecast(Exp_Basic):
 
                 hyperglycemia = torch.sigmoid(hyperglycemia).detach().cpu().numpy()
                 hypoglycemia = torch.sigmoid(hypoglycemia).detach().cpu().numpy()
+                
+                # Apply recalibration if enabled
+                if self.hyper_calibrator is not None:
+                    hyperglycemia = self.hyper_calibrator.calibrate(hyperglycemia)
+                if self.hypo_calibrator is not None:
+                    hypoglycemia = self.hypo_calibrator.calibrate(hypoglycemia)
+                
                 hyper_probs.extend(hyperglycemia.flatten())
                 hypo_probs.extend(hypoglycemia.flatten())
                 # Store pre-transform values

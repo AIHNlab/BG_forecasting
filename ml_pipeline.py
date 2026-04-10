@@ -18,13 +18,13 @@ from scaler import Scaler
 from evaluator import Evaluator
 import warnings
 from sklearn.preprocessing import StandardScaler
-from utils import IdentityTransformer
+from utils import IdentityTransformer, get_thresholded_events
 warnings.simplefilter(action='ignore', category=FutureWarning)
 import json
 import numpy as np
 import shutil
 from custom_dataset import CustomDataset, EventBalancedSampler
-from alarm_evaluation import run_evaluation
+from alarm_evaluation import run_evaluation, compute_calibration_curve, plot_calibration_curve, aggregate_calibration_data
 from forecast_evaluation import plot_and_evaluate_horizon, evaluate_cg_ega_horizon, evaluate_uncertainty_calibration, create_calibration_analysis
 
 #def evaluate_model(hp_config,features_test, target_test, model_path):
@@ -145,6 +145,10 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
     mae_errors = []
     calibration_summary = []
     historic_context = None  # Ensure variable is always defined
+    
+    # Collect calibration data across all participants
+    all_hyper_calibration_data = []
+    all_hypo_calibration_data = []
     #i=0
     for participant in participants:
         #i+=1
@@ -175,6 +179,15 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
                               rolling_mean_window=config['run_config']['rolling_mean_window']
                               )
         testset = prepper.make_features_and_targetpair()
+        #Temp code for doing calibation based on validation set only
+        if False:
+            train_indices, val_indices = create_temporal_split(testset)
+
+            # Create Subset Datasets
+            from torch.utils.data import Subset
+            train_dataset = Subset(testset, train_indices)
+            val_dataset = Subset(testset, val_indices)
+            testset = val_dataset
         #test_data = CustomDataset(features_test, target_test, config['run_config']['features'], config['run_config']['targets'], config['hp_config']['history_of_days'], config['hp_config']['forecast_steps'], config['run_config']['test_target'], config['hp_config']['days_to_mask'])
         test_loader = DataLoader(testset, shuffle=False, batch_size=config['hp_config']['batch_size'])
         trainer = globals()[config["run_config"]["trainer"]](config['hp_config'], os.path.dirname(__file__)+os.sep+config['run_config']['experiment_path']+os.sep+'best_model.pth')
@@ -182,10 +195,25 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
             # Yes, you can pass a scaler for just one of the channels if your trainer/test method supports it.
             # For example, if you only want to scale channel 0, you could do:
             predictions, actuals = trainer.test(test_loader, scaler=prepper.scaler_y.scaler)
-            means, stds, hyper_probs, hypo_probs = None, None, None, None
+            # Convert sentinel values to NaN
             predictions = np.where(np.isin(predictions, [-8, -9]), np.nan, predictions)
+
+            # Default to None for means/stds so downstream code will set sensible defaults
+            means, stds = None, None
+
+            hyper_thresh = config['hp_config'].get('hyperglycemia_threshold', 180)
+            hypo_thresh = config['hp_config'].get('hypoglycemia_threshold', 70)
+
+            # Ensure predictions shape is (N, H, C) and create per-sample binary probabilities
+            hyper_probs, hypo_probs = get_thresholded_events(predictions, hyper_thresh=hyper_thresh, hypo_thresh=hypo_thresh)
+
         else:
             predictions, actuals, means, stds, hyper_probs, hypo_probs, historic_context = trainer.test(test_loader, scaler=prepper.scaler_y.scaler, hypoglycemia_threshold=prepper.hypoglycemia_threshold, hyperglycemia_threshold=prepper.hyperglycemia_threshold, scaler_input=prepper.scaler_x.scaler)
+            if True: # Temp test where events are computed from the predictions
+                hyper_thresh = config['hp_config'].get('hyperglycemia_threshold', 180)
+                hypo_thresh = config['hp_config'].get('hypoglycemia_threshold', 70)
+                hyper_probs, hypo_probs = get_thresholded_events(predictions, hyper_thresh=hyper_thresh, hypo_thresh=hypo_thresh)
+
         
         if actuals.size == 0:
             continue
@@ -237,6 +265,59 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
                 event_metrics_all.append(event_metrics)
         if event_metrics is not None:
             event_metrics_all.append(event_metrics)
+        
+        # Collect calibration data for this participant
+        current_bg_levels = actuals[:, 0].flatten()[:-1]
+        
+        # Apply the same masking logic as in run_evaluation
+        if historic_context is not None:
+            nan_mask = np.isnan(current_bg_levels)
+            window = config['run_config'].get('required_samples_window', 24)
+            required_samples = config['run_config'].get('required_samples_during_test', [24, 1, 1])
+            
+            nan_window_mask = np.zeros_like(nan_mask, dtype=bool)
+            nan_window_mask[:window] = True
+            
+            for i in range(window, len(nan_mask)):
+                should_mask = False
+                if i < len(historic_context):
+                    window_inputs = historic_context[i, -window:, :]
+                    for channel_idx, required_count in enumerate(required_samples):
+                        if channel_idx < window_inputs.shape[1]:
+                            channel_data = window_inputs[:, channel_idx]
+                            valid_count = np.sum(~np.isnan(channel_data))
+                            if valid_count < required_count:
+                                should_mask = True
+                                break
+                nan_window_mask[i] = should_mask
+            
+            final_mask = nan_mask | nan_window_mask
+        else:
+            nan_mask = np.isnan(current_bg_levels)
+            window = 24
+            nan_window_mask = np.zeros_like(nan_mask, dtype=bool)
+            for i in range(window, len(nan_mask)):
+                if np.any(nan_mask[i-window:i]):
+                    nan_window_mask[i] = True
+            final_mask = nan_mask | nan_window_mask
+        
+        # Create binary labels for hyper/hypo events
+        bg_hyper_binary = (current_bg_levels > 180).astype(float)
+        bg_hypo_binary = (current_bg_levels < 70).astype(float)
+        
+        # Get probability arrays
+        hyper_probs_arr = np.array(hyper_probs[1:])
+        hypo_probs_arr = np.array(hypo_probs[1:])
+        
+        # Apply masking
+        bg_hyper_binary[final_mask] = np.nan
+        bg_hypo_binary[final_mask] = np.nan
+        hyper_probs_arr[final_mask] = np.nan
+        hypo_probs_arr[final_mask] = np.nan
+        
+        # Store for aggregation
+        all_hyper_calibration_data.append((bg_hyper_binary, hyper_probs_arr))
+        all_hypo_calibration_data.append((bg_hypo_binary, hypo_probs_arr))
 
         for horizon in forecast_horizons:
             pred_horizon = np.array(predictions)[:, horizon-1].flatten()
@@ -423,6 +504,58 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
         # Compute and save summary stats grouped by threshold and condition
         summary_stats = event_df.drop(columns=['Participant']).groupby(['Threshold', 'Condition']).agg(['mean', 'std']).transpose()
         summary_stats.to_csv(os.path.dirname(__file__)+os.sep+os.path.join(config['run_config']['experiment_path'], 'evaluation', 'event_level_summary_stats_multi_threshold.csv'))
+        
+        # Generate calibration curves for alarm system (aggregated across all participants)
+        print("\n=== Generating Alarm Calibration Curves ===")
+        
+        # Aggregate hyperglycemia calibration data
+        all_hyper_true, all_hyper_prob = aggregate_calibration_data(all_hyper_calibration_data, event_type='hyper')
+        if all_hyper_true is not None and all_hyper_prob is not None:
+            print(f"Hyperglycemia: {len(all_hyper_true)} samples collected from {len(participants)} participants")
+            
+            # Compute calibration curve
+            hyper_calibration = compute_calibration_curve(all_hyper_true, all_hyper_prob, n_bins=10, strategy='uniform')
+            
+            if hyper_calibration is not None:
+                # Plot and save calibration curve WITH distribution
+                hyper_plot_path = os.path.join(evaluation_path, 'alarm_calibration_curve_hyperglycemia.png')
+                plot_calibration_curve(hyper_calibration, event_type='hyperglycemia', save_path=hyper_plot_path, show_distribution=True)
+                
+                # Plot and save calibration curve WITHOUT distribution
+                hyper_plot_path_clean = os.path.join(evaluation_path, 'alarm_calibration_curve_hyperglycemia_clean.png')
+                plot_calibration_curve(hyper_calibration, event_type='hyperglycemia', save_path=hyper_plot_path_clean, show_distribution=False)
+                
+                # Save calibration metrics
+                hyper_metrics_path = os.path.join(evaluation_path, 'alarm_calibration_metrics_hyperglycemia.json')
+                with open(hyper_metrics_path, 'w') as f:
+                    json.dump(hyper_calibration, f, indent=4)
+                
+                print(f"Hyperglycemia Calibration - Brier Score: {hyper_calibration['brier_score']:.4f}, ECE: {hyper_calibration['expected_calibration_error']:.4f}")
+        
+        # Aggregate hypoglycemia calibration data
+        all_hypo_true, all_hypo_prob = aggregate_calibration_data(all_hypo_calibration_data, event_type='hypo')
+        if all_hypo_true is not None and all_hypo_prob is not None:
+            print(f"Hypoglycemia: {len(all_hypo_true)} samples collected from {len(participants)} participants")
+            
+            # Compute calibration curve
+            hypo_calibration = compute_calibration_curve(all_hypo_true, all_hypo_prob, n_bins=10, strategy='uniform')
+            
+            if hypo_calibration is not None:
+                # Plot and save calibration curve WITH distribution
+                hypo_plot_path = os.path.join(evaluation_path, 'alarm_calibration_curve_hypoglycemia.png')
+                plot_calibration_curve(hypo_calibration, event_type='hypoglycemia', save_path=hypo_plot_path, show_distribution=True)
+                
+                # Plot and save calibration curve WITHOUT distribution
+                hypo_plot_path_clean = os.path.join(evaluation_path, 'alarm_calibration_curve_hypoglycemia_clean.png')
+                plot_calibration_curve(hypo_calibration, event_type='hypoglycemia', save_path=hypo_plot_path_clean, show_distribution=False)
+                
+                # Save calibration metrics
+                hypo_metrics_path = os.path.join(evaluation_path, 'alarm_calibration_metrics_hypoglycemia.json')
+                with open(hypo_metrics_path, 'w') as f:
+                    json.dump(hypo_calibration, f, indent=4)
+                
+                print(f"Hypoglycemia Calibration - Brier Score: {hypo_calibration['brier_score']:.4f}, ECE: {hypo_calibration['expected_calibration_error']:.4f}")
+        
         # Save calibration summary
         pd.DataFrame(calibration_summary).to_csv(os.path.join(evaluation_path, 'calibration_summary.csv'), index=False)
         # Compute and save calibration summary stats
@@ -627,10 +760,12 @@ def main(config, train=True, test=True):
 
     if config['run_config']['test']:
         if config['run_config']['test_participants'] == 'all':
+            #participants_test = list(data_handler.get_train_dataframes().keys())
             participants_test = list(data_handler.get_test_dataframes().keys())
         else:
             participants_test = config['run_config']['test_participants']
 
+        #evaluate_model(config, data_handler.get_train_dataframes(), scaler_class_x, scaler_class_y, participants=participants_test, metadata=data_handler.get_train_metadata())
         evaluate_model(config, data_handler.get_test_dataframes(), scaler_class_x, scaler_class_y, participants=participants_test, metadata=data_handler.get_test_metadata())
 
 if __name__ == "__main__":
@@ -676,7 +811,7 @@ if __name__ == "__main__":
     #data_handler.load_data(save_as_csv=True)
     #data_handler = DataHandler("DataloaderTidepoolSAP100", r"C:\Users\knutj\OneDrive - Universitaet Bern\Datasets\Tidepool Data", dataset_name="Tidepool_SAP100")
     #data_handler.load_data(save_as_csv=True)
-    experiment_path = os.path.join('experiments','TestPC')
+    experiment_path = os.path.join('experiments','TransformerThreshold')
     #experiment_path = os.path.join('experiments','LinRegTest2H')
 
     model_config_path = experiment_path+os.sep+'model_config.json'
