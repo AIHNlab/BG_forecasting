@@ -1,3 +1,15 @@
+"""Event-level alarm evaluation and calibration for hypo/hyperglycemia.
+
+Provides functions to:
+
+1. Threshold predicted probabilities into binary alarm signals.
+2. Filter short spurious events and merge nearby detections.
+3. Match predicted events to ground-truth events within a time window.
+4. Compute precision, recall, detection lead-time, and daily false-alarm rate.
+5. Build and plot calibration curves (reliability diagrams).
+6. Aggregate calibration data across participants for population-level analysis.
+"""
+
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.ndimage import label
@@ -10,6 +22,22 @@ from sklearn.calibration import calibration_curve
 from sklearn.metrics import brier_score_loss, log_loss
 
 def compute_event_level_metrics(true_binary, pred_binary, sampling_interval=5, match_window_min=60):
+    """Match predicted alarm events to true events and compute metrics.
+
+    Events are identified by rising edges (0→1) in the binary signals.
+    A predicted event is matched to the nearest true event that starts
+    within ``match_window_min`` minutes ahead of the prediction.
+
+    Args:
+        true_binary: 1-D array of ground-truth binary event signal.
+        pred_binary: 1-D array of predicted binary alarm signal.
+        sampling_interval: Minutes between consecutive time-steps.
+        match_window_min: Maximum look-ahead window (minutes) for matching.
+
+    Returns:
+        dict: ``precision``, ``recall``, ``average_detection_time_min``,
+              ``daily_false_alarms``, and raw counts.
+    """
 
     # Convert time to steps
     match_window = match_window_min // sampling_interval
@@ -61,6 +89,16 @@ def compute_event_level_metrics(true_binary, pred_binary, sampling_interval=5, m
     }
 
 def filter_binary_events(binary, min_duration=3, min_separation=6):
+    """Remove short-lived events and merge events separated by small gaps.
+
+    Args:
+        binary: 1-D binary array (0/1).
+        min_duration: Minimum consecutive 1s for an event to be kept.
+        min_separation: Gaps shorter than this are filled (events merged).
+
+    Returns:
+        np.ndarray: Smoothed binary event signal.
+    """
 
     labeled, num_features = label(binary)
     filtered = np.zeros_like(binary)
@@ -119,6 +157,28 @@ def plot_filtered_events(ax, true_binary, pred_binary, threshold):
 
 
 def run_evaluation(actuals, hyper_probs, hypo_probs, participant, config, threshold=0.4, historic_context=None, required_samples=None):
+    """Run full alarm evaluation for one participant at a given threshold.
+
+    Applies a validity mask (based on ``historic_context`` channel
+    requirements or a simple NaN sliding window), thresholds the
+    predicted probabilities, filters events, computes event-level
+    metrics, builds calibration curves, and saves plots.
+
+    Args:
+        actuals: Array of shape ``(N, H, C)`` with true BG values.
+        hyper_probs: 1-D array of predicted hyperglycemia probabilities.
+        hypo_probs: 1-D array of predicted hypoglycemia probabilities.
+        participant: Participant identifier (used in file paths / titles).
+        config: Full experiment config dict.
+        threshold: Probability threshold for binary alarm decision.
+        historic_context: Optional array of model input history for
+            validity masking based on per-channel sample requirements.
+        required_samples: Per-channel minimum valid sample counts.
+
+    Returns:
+        dict or None: Event-level metrics for hyper and hypo, or None
+        if probability arrays are missing.
+    """
     if hyper_probs is None or hypo_probs is None:
         return
 

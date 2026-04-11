@@ -1,3 +1,11 @@
+"""Experiment orchestration: config handling, data loading, and pipeline dispatch.
+
+The ``main()`` function is the single entry point for running an experiment
+end-to-end: it initialises the experiment directory, loads the dataset(s),
+configures scalers, and delegates to ``train_model`` / ``evaluate_model``
+based on the ``run_config.train`` and ``run_config.test`` flags.
+"""
+
 import os
 import json
 import shutil
@@ -15,6 +23,12 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def init_experiment_directory(config):
+    """Create the experiment directory and copy parent model artifacts if specified.
+
+    Copies ``scaler_input.pkl``, ``scaler_target.pkl``, and ``best_model.pth``
+    from ``parent_model_path`` when doing fine-tuning.  Also writes a snapshot
+    of the current config to ``model_config.json`` in the experiment directory.
+    """
     experiment_path = _PROJECT_ROOT + os.sep + config['run_config']['experiment_path']
 
     os.makedirs(experiment_path, exist_ok=True)
@@ -28,6 +42,16 @@ def init_experiment_directory(config):
         f.write(json.dumps(config, indent=4))
 
 def main(config, train=True, test=True):
+    """Run a full experiment: load data, optionally train, optionally evaluate.
+
+    Supports both single-dataset and multi-dataset (merged) configurations.
+    Trainer and scaler classes are resolved at runtime via ``globals()``.
+
+    Args:
+        config: Experiment configuration dict with ``hp_config`` and ``run_config``.
+        train: Ignored — controlled by ``config['run_config']['train']``.
+        test: Ignored — controlled by ``config['run_config']['test']``.
+    """
     init_experiment_directory(config)
     if len(config['run_config']['dataloaders']) == 1:
         data_handler = DataHandler(config['run_config']['dataloaders'][0], "", dataset_name=config['run_config']['dataset_names'][0])

@@ -1,3 +1,9 @@
+"""Registry of all dataset-specific dataloader classes.
+
+Importing this package makes every dataloader available for dynamic
+class resolution via ``globals()`` in ``DataHandler``.
+"""
+
 from dataloaders.dataloader import Dataloader
 from dataloaders.dataloader_ohio import DataloaderOhio
 from dataloaders.dataloader_tidepool_sap100 import DataloaderTidepoolSAP100

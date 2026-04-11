@@ -1,3 +1,11 @@
+"""Feature engineering, scaling, and SequenceDataset construction.
+
+The ``DataPrepper`` class takes raw per-participant DataFrames from
+``DataHandler``, selects and scales features/targets, handles missing
+values, and produces a concatenated ``SequenceDataset`` ready to be
+wrapped in a PyTorch ``DataLoader``.
+"""
+
 import torch
 import numpy as np
 from data.scaler import Scaler
@@ -6,6 +14,30 @@ import pandas as pd
 from data.dataset import SequenceDataset
 
 class DataPrepper:
+    """Prepares raw participant DataFrames into scaled PyTorch datasets.
+
+    Responsibilities:
+
+    1. Fit / load input and target scalers (``Scaler``).
+    2. For each participant: select features, apply optional Gaussian
+       rolling mean, normalize, pad, fill missing values, and wrap into
+       a ``SequenceDataset``.
+    3. Return a single ``ConcatDataset`` over all participants.
+
+    Args:
+        participants: Iterable of participant identifiers.
+        dataframes: Dict mapping participant id → ``pd.DataFrame``.
+        forecast_steps: Number of future time-steps to predict.
+        scaler_class_x: Unfitted scikit-learn scaler instance for input features.
+        scaler_class_y: Unfitted scikit-learn scaler instance for target features.
+        sequence_length: Length of the input look-back window.
+        feature_list: Column names used as input features.
+        target_list: Column names used as prediction targets.
+        fill_types: Per-feature strategy for imputing missing values.
+        experiment_path: Directory for persisting scaler files.
+        See ``__init__`` for full parameter list.
+    """
+
     def __init__(self, participants, dataframes, specific_participant=None, 
                  forecast_steps=24, scaler_class_x = None, scaler_class_y = None, sequence_length = 25, patch_size=288,
                  feature_list = ['cbg', 'basal', 'carbInput', 'bolus'], target_list = ['cbg'],
@@ -73,6 +105,19 @@ class DataPrepper:
 
     #@profile
     def make_features_and_targetpair(self):
+        """Build a ``ConcatDataset`` of ``SequenceDataset`` instances, one per participant.
+
+        For each participant the method:
+        1. Applies optional Gaussian rolling mean smoothing.
+        2. Selects feature/target columns and records missing-value masks.
+        3. Normalizes with the fitted scaler.
+        4. Pads the beginning with ``sequence_length`` zeros / ``-8`` sentinels.
+        5. Fills remaining NaNs according to ``fill_types``.
+        6. Wraps into a ``SequenceDataset``.
+
+        Returns:
+            torch.utils.data.ConcatDataset: Combined dataset over all participants.
+        """
         participant_datasets = []
 
         for participant in tqdm(self.participants, desc="Processing participants"):
@@ -153,6 +198,12 @@ class DataPrepper:
 
 
     def handle_missing_values(self, df, features, fill_types):
+        """Impute NaN values in-place using the per-feature fill strategy.
+
+        Supports ``'mean'``, ``'linear'`` (interpolation + forward/back-fill),
+        and numeric constant fill values.  Works on both DataFrames and NumPy
+        arrays.
+        """
         if isinstance(df, pd.DataFrame):
             for feature, fill_type in zip(features, fill_types):
                 if isinstance(fill_type, str):

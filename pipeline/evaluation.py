@@ -1,3 +1,15 @@
+"""Model evaluation: per-participant inference, metric aggregation, and reporting.
+
+Orchestrates the full evaluation loop:
+
+1. For each test participant, build a ``SequenceDataset`` and run inference.
+2. Compute per-horizon RMSE/MAE (overall and by glycemic range).
+3. Run CG-EGA analysis.
+4. Run alarm evaluation at multiple probability thresholds.
+5. Evaluate uncertainty calibration (PICP / PICE).
+6. Aggregate and save CSV/JSON summaries and plots.
+"""
+
 import os
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -27,6 +39,11 @@ _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def plot_per_horizon(horizons, plot_data, participants, config):
+    """Save a multi-panel plot with all participants for each forecast horizon.
+
+    Each panel shows actuals, predictions, and a 95% confidence band.
+    Saved to ``<experiment_path>/evaluation/all_participants_horizon_<h>.png``.
+    """
     for horizon in horizons:
         fig, axs = plt.subplots(len(participants), 1, figsize=(30, 6 * len(participants)))
         if len(participants) == 1:
@@ -62,6 +79,21 @@ def plot_per_horizon(horizons, plot_data, participants, config):
 
 
 def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participants, metadata):
+    """Evaluate a trained model on all test participants.
+
+    For each participant: builds a test ``SequenceDataset``, runs inference
+    via the configured trainer, and computes per-horizon RMSE/MAE,
+    CG-EGA, alarm metrics, and uncertainty calibration.  Results are
+    aggregated into CSV/JSON files under ``<experiment_path>/evaluation/``.
+
+    Args:
+        config: Full experiment config dict.
+        dataframes: Dict of participant → test DataFrame.
+        scaler_class_x: Fitted input scaler instance.
+        scaler_class_y: Fitted target scaler instance.
+        participants: List of participant identifiers to evaluate.
+        metadata: Dict of participant → metadata dict.
+    """
     plot_data = {horizon: [] for horizon in config['hp_config']['forecast_horizons']}
     rmses = {horizon: [] for horizon in config['hp_config']['forecast_horizons']}
     cg_ega_metrics = {horizon: [] for horizon in config['hp_config']['forecast_horizons']}

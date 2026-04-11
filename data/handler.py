@@ -1,3 +1,10 @@
+"""High-level data loading with caching and dynamic dataloader dispatch.
+
+The ``DataHandler`` class wraps individual dataset-specific dataloaders
+(see ``dataloaders/``) and provides a unified interface for loading,
+caching, and accessing train/test DataFrames and metadata.
+"""
+
 import os
 import pandas as pd
 import pickle
@@ -17,6 +24,19 @@ from dataloaders.dataloader_geneva import DataloaderGeneva
 
 
 class DataHandler:
+    """Unified interface for loading and caching clinical datasets.
+
+    Instantiates a dataset-specific dataloader via ``globals()`` lookup,
+    loads data (from raw source or cached pickle files under
+    ``standardized_datasets/<dataset_name>/``), and exposes accessor
+    methods for train/test splits and per-participant metadata.
+
+    Args:
+        dataloader_type: Class name of the dataloader (e.g. ``'DataloaderOhio'``).
+        dataset_path: Filesystem path to the raw dataset.
+        dataset_name: Short identifier used for the cache directory.
+    """
+
     def __init__(self, dataloader_type, dataset_path, dataset_name):
         #self.dataloader = dataloader_type
         self.dataset_name = dataset_name
@@ -44,6 +64,14 @@ class DataHandler:
         save_dataframes(self.dataloader.test_dataframes, path + os.sep + 'test')
 
     def load_data(self, load_from_pkl = True, save_as_pkl=True, save_as_csv=False, reload_metadata=False):
+        """Load dataset, using cached pickles when available.
+
+        Args:
+            load_from_pkl: If True, try loading from ``standardized_datasets/`` cache first.
+            save_as_pkl: If True, cache loaded data as pickle files after first load.
+            save_as_csv: If True, additionally save DataFrames as CSV files.
+            reload_metadata: If True, recompute and overwrite cached metadata JSON.
+        """
         standardized_datasets_path = os.path.join('standardized_datasets', self.dataset_name)
         if (os.path.exists(standardized_datasets_path) and load_from_pkl):
             if os.path.exists(standardized_datasets_path + os.sep + 'all_dataframes.pkl'):
@@ -112,6 +140,8 @@ class DataHandler:
             raise ValueError(f"No class named {type} found")
 
 class CompactArrayEncoder(json.JSONEncoder):
+    """JSON encoder that formats lists on a single line for compact metadata files."""
+
     def encode(self, o):
         parts = []
         for item in o:

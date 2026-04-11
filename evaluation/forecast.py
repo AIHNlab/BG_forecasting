@@ -1,3 +1,9 @@
+"""Per-horizon forecast evaluation: RMSE, MAE, CG-EGA, and uncertainty calibration.
+
+All functions operate on NumPy arrays of predictions/actuals that have
+already been inverse-scaled to mg/dL.
+"""
+
 import os
 import numpy as np
 import matplotlib.pyplot as plt

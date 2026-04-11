@@ -1,3 +1,19 @@
+"""PyTorch datasets and samplers for blood glucose time-series.
+
+Provides:
+
+- **SequenceDataset** — sliding-window dataset that yields
+  ``(sequence, target_reconstruction, target_forecast[, metadata])`` tuples
+  with built-in patch masking, SMBG simulation, and covariate dropout.
+- **CustomDataset** — simpler pre-windowed dataset used by the Glucobench
+  training path.
+- **EventBalancedSampler** — PyTorch ``Sampler`` that balances batches
+  across hypo-, hyper-, and normoglycemic windows.
+
+Missing-value sentinels used throughout:
+    ``-9`` = missing, ``-8`` = padding, ``-6`` = masked patch, ``-5`` = future.
+"""
+
 import torch
 from torch.utils.data import TensorDataset, DataLoader, Dataset, Sampler
 import numpy as np
@@ -62,6 +78,24 @@ def random_subsample_feature(sequence, feature_idx, sample_rate):
     return subsampled
 
 class SequenceDataset(Dataset):
+    """Sliding-window dataset over a single participant’s scaled time-series.
+
+    During ``__getitem__``, the raw window is augmented in-place:
+
+    * Random patch masking (sentinel ``-6``) controlled by ``mask_prob``.
+    * SMBG simulation via random sub-sampling of the CGM channel.
+    * Covariate dropout (sentinel ``-9``) via ``chance_feature_missing``.
+    * Future target steps are masked in the *input* (sentinel ``-9``/``-6``)
+      while kept visible in the *target* tensor.
+    * Optional ``context_limit`` restricts how much history the model sees.
+
+    Returns:
+        tuple: ``(sequence, target_reconstruction, target_forecast)`` or
+               ``(sequence, target_reconstruction, target_forecast, metadata)``
+               depending on whether metadata is provided. In baseline mode
+               returns ``(sequence, target_forecast)``.
+    """
+
     def __init__(self, input_data, input_data_missing_mask, target_data, target_data_missing_mask, 
                  sequence_length, forecast_steps, step, allowed_missing_values_rate, allowed_missing_values_rate_target,
                  feature_list, target_list, test_target, patch_size, mask_prob, chance_of_smbg, chance_feature_missing, metadata,
@@ -212,6 +246,20 @@ class SequenceDataset(Dataset):
             return sequence, target_reconstruction, target_forecast
 
 class EventBalancedSampler(Sampler):
+    """Batch sampler that balances hypo-, hyper-, and normoglycemic windows.
+
+    Scans the dataset once at construction to classify each window into
+    one of three buckets based on the fraction of the last 24 target
+    steps that fall below/above the glucose thresholds.  Each batch
+    then draws roughly equal counts from each bucket.
+
+    Args:
+        dataset: A ``SequenceDataset`` (or ``Subset``) to sample from.
+        batch_size: Number of samples per batch (split ~equally into 3 groups).
+        threshold_low: BG value (mg/dL) below which a window counts as hypoglycemic.
+        threshold_high: BG value (mg/dL) above which a window counts as hyperglycemic.
+    """
+
     def __init__(self, dataset, batch_size, threshold_low=70, threshold_high=180):
         self.dataset = dataset
         self.batch_size = batch_size

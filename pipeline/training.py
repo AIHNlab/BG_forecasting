@@ -1,3 +1,15 @@
+"""Model training: dataset splitting, DataLoader construction, and trainer dispatch.
+
+Provides two training paths:
+
+- ``train_model()`` — standard path for LSTM / Transformer models using
+  ``SequenceDataset`` with temporal train/validation split.
+- ``train_model_glucobench()`` — Glucobench-style path using ``CustomDataset``
+  with random train/validation split.
+
+Trainer classes are resolved via ``globals()`` from the config string.
+"""
+
 import os
 import torch
 from torch.utils.data import DataLoader, Subset
@@ -43,6 +55,19 @@ def create_temporal_split(full_dataset, val_ratio=0.05):
     return train_indices, val_indices
 
 def train_model(config, full_dataset, hypoglycemia_threshold, hyperglycemia_threshold):
+    """Train a model using a temporal train/validation split.
+
+    Splits ``full_dataset`` chronologically (last 5% for validation),
+    builds ``DataLoader`` instances, resolves the trainer class from
+    ``config['run_config']['trainer']`` via ``globals()``, and runs
+    ``trainer.train()``.
+
+    Args:
+        config: Full experiment config dict.
+        full_dataset: A ``ConcatDataset`` from ``DataPrepper.make_features_and_targetpair()``.
+        hypoglycemia_threshold: Scaled BG threshold (from the scaler).
+        hyperglycemia_threshold: Scaled BG threshold (from the scaler).
+    """
     
 
     # Get all indices
@@ -72,6 +97,18 @@ def train_model(config, full_dataset, hypoglycemia_threshold, hyperglycemia_thre
 
 
 def train_model_glucobench(config, dataframes_train, dataframes_val, retrain_model=False):
+    """Train a model using the Glucobench-style pipeline with separate train/val DataFrames.
+
+    Uses ``DataPrepper`` + ``CustomDataset`` (pre-windowed sequences) and a
+    random 80/20 train/val split.  Initialises the experiment directory,
+    fits scalers, and dispatches to the configured trainer.
+
+    Args:
+        config: Full experiment config dict.
+        dataframes_train: Dict of participant → training DataFrame.
+        dataframes_val: Dict of participant → validation DataFrame.
+        retrain_model: If False, skip training (load existing weights).
+    """
     init_experiment_directory(config)
     if config["run_config"]['train'] == False:
         return

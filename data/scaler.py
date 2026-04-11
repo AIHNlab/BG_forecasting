@@ -1,9 +1,32 @@
+"""Persistent feature scaler wrapper.
+
+The ``Scaler`` class fits a scikit-learn scaler on training data and
+persists it to disk so that the same transform can be re-used at
+evaluation time without re-fitting.
+"""
+
 import os
 import joblib
 import pandas as pd
 import numpy as np
 
 class Scaler:
+    """Fits, persists, and applies a scikit-learn scaler.
+
+    On first use the scaler is fitted on the concatenated training
+    DataFrames and saved to ``<file_path>/scaler_input.pkl`` (or
+    ``scaler_target.pkl``).  On subsequent runs the saved scaler is
+    loaded from disk.
+
+    Args:
+        dataframes: Dict of participant → ``pd.DataFrame`` (training set).
+        features: List of column names to scale.
+        scaler: An unfitted scikit-learn scaler instance (e.g. ``StandardScaler()``).
+        file_path: Directory where the ``.pkl`` file is stored.
+        is_input: If True, saves as ``scaler_input.pkl``; otherwise ``scaler_target.pkl``.
+        missing_mask: Optional dict of boolean masks for partial fitting.
+    """
+
     def __init__(self, dataframes, features, scaler, file_path, is_input, missing_mask=None):
         self.dataframes = dataframes
         self.features = features
