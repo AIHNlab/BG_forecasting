@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from scaler import Scaler
+from data.scaler import Scaler
 from tqdm import tqdm
 import pandas as pd
 

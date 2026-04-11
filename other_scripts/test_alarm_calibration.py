@@ -5,7 +5,7 @@ This demonstrates the calibration curve functionality with synthetic data.
 
 import numpy as np
 import matplotlib.pyplot as plt
-from alarm_evaluation import compute_calibration_curve, plot_calibration_curve, aggregate_calibration_data
+from evaluation.alarm import compute_calibration_curve, plot_calibration_curve, aggregate_calibration_data
 import os
 import json
 

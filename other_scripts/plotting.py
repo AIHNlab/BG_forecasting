@@ -6,14 +6,13 @@ from torch.utils.data import TensorDataset, DataLoader
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from dataprepper import DataPrepper
+from data.prepper import DataPrepper
 from architectures.lstms import MirshekarianLSTM
 from trainers.trainer_basic import TrainerBasic
-from datahandler import DataHandler
+from data.handler import DataHandler
 
-from datapreprocessor import DataPreProcessor
-from scaler import Scaler
-from evaluator import Evaluator
+from data.scaler import Scaler
+from evaluation.metrics import Evaluator
 import warnings
 from sklearn.preprocessing import StandardScaler
 warnings.simplefilter(action='ignore', category=FutureWarning)

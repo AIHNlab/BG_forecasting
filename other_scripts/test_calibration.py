@@ -5,7 +5,7 @@ This script shows how to use the new calibration functions.
 
 import numpy as np
 import matplotlib.pyplot as plt
-from alarm_evaluation import compute_calibration_metrics, plot_calibration_curve
+from evaluation.alarm import compute_calibration_metrics, plot_calibration_curve
 
 # Generate synthetic data for demonstration
 np.random.seed(42)

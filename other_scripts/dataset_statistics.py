@@ -1,12 +1,11 @@
 import os
 import matplotlib.pyplot as plt
 import pandas as pd
-from dataprepper import DataPrepper
-from datahandler import DataHandler
+from data.prepper import DataPrepper
+from data.handler import DataHandler
 from dataloaders.dataloader_tidepool_sap100 import Dataloader
-from datapreprocessor import DataPreProcessor
-from scaler import Scaler
-from evaluator import Evaluator
+from data.scaler import Scaler
+from evaluation.metrics import Evaluator
 import warnings
 from sklearn.preprocessing import StandardScaler
 from utils import IdentityTransformer
