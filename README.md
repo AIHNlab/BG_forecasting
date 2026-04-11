@@ -1,42 +1,183 @@
-# ProgrammingTask
+# Blood Glucose Forecasting
 
-## Repository Overview
-This repository contains several Python scripts and Jupyter notebooks for the ProgrammingTask
+A modular ML pipeline for blood glucose (BG) forecasting using LSTM and Transformer architectures. Supports training, evaluation, hyperparameter sweeps, alarm detection, and uncertainty calibration across 13+ clinical datasets.
 
-Here's a brief overview of each file:
-
-- `datahandler.py`: Contains methods for reading and preprocessing the data.
-- `dataprepper.py`: Contains methods for preparing the targets and features for the models.
-- `models.py`: Defines the forecasting model.
-- `trainer.py`: Contains the method for training the model.
-- `evaluator.py`: Contains the method for evaluating the model's performance.
-
-The trained models are located in the "models" directory on the format:
-
-`<dataset_name>/<model_type>/<forecast_steps>/<participantID>.pth`
-
-The scalers are located in the "scalers" directory.
-
-## Reports
-The main report is located in the Jupyter Notebook:
-- `Report.ipynb`
-
-Detailed results of each forecasting step are provided in three separate Jupyter notebooks:
-
-- `Report_forecast_30min.ipynb`
-- `Report_forecast_60min.ipynb`
-- `Report_forecast_90min.ipynb`
-
-To avoid retraining all the models when running the notebooks, follow these steps:
-
-1. Run all sections before the "Experiments" section.
-2. Run all sections after the "Experiments" section.
-
-## Installation
-To install all the necessary libraries, run the following command in your terminal:
+## Quick Start
 
 ```bash
+# 1. Create and activate a virtual environment
+python -m venv .venv
+.venv\Scripts\activate   # Windows
+# source .venv/bin/activate  # Linux/Mac
+
+# 2. Install dependencies
 pip install -r requirements.txt
 
-## Datamodel
-https://illustrious-star-52d.notion.site/Datamodel-b12271138b9543c0938635e364278099?pvs=4
+# 3. Run a single experiment
+# Edit the experiment_path in ml_pipeline.py, then:
+python ml_pipeline.py
+
+# 4. Run a hyperparameter sweep
+python run_multiple.py    # LSTM sweep
+python run_multiple2.py   # Transformer sweep
+```
+
+## Project Structure
+
+```
+BG_forecasting/
+│
+├── ml_pipeline.py              # Main entry point (shim → pipeline/)
+├── run_multiple.py             # LSTM hyperparameter grid search
+├── run_multiple2.py            # Transformer hyperparameter grid search
+├── robustness.py               # Parameter sensitivity sweep runner
+├── hp_summary.py               # Summarize HP search results
+├── utils.py                    # Shared utilities (IOB/COB calculations, etc.)
+│
+├── pipeline/                   # Core pipeline (split from ml_pipeline.py)
+│   ├── orchestrator.py         #   main(), init_experiment_directory()
+│   ├── training.py             #   train_model(), create_temporal_split()
+│   └── evaluation.py           #   evaluate_model(), plot_per_horizon()
+│
+├── data/                       # Data loading and preprocessing
+│   ├── handler.py              #   DataHandler — dataset loading & caching
+│   ├── prepper.py              #   DataPrepper — normalization, sequencing, masking
+│   ├── dataset.py              #   SequenceDataset, EventBalancedSampler (PyTorch)
+│   └── scaler.py               #   Scaler — feature normalization with persistence
+│
+├── evaluation/                 # Evaluation metrics and visualization
+│   ├── alarm.py                #   Event-level alarm metrics, calibration curves
+│   ├── forecast.py             #   RMSE/MAE by glycemic zone, CG-EGA, uncertainty
+│   └── metrics.py              #   Evaluator (basic RMSE)
+│
+├── dataloaders/                # Dataset-specific loaders (one per dataset)
+│   ├── dataloader.py           #   Abstract base class
+│   ├── dataloader_ohio.py      #   OhioT1DM (2018, 2020)
+│   ├── dataloader_tidepool_sap100.py
+│   ├── dataloader_tidepool_hcl150.py
+│   ├── dataloader_t1dexi.py
+│   ├── dataloader_glucobench.py
+│   ├── dataloader_shanghai.py
+│   ├── dataloader_ai4food.py
+│   ├── dataloader_geneva.py
+│   └── ...
+│
+├── trainers/                   # Training loops
+│   ├── exp_basic.py            #   Base class for Transformer trainers
+│   ├── exp_long_term_forecasting.py  # Transformer training (cosine LR, calibration)
+│   ├── trainer_basic.py        #   LSTM training loop with early stopping
+│   └── trainer_linreg.py       #   Linear regression baselines (sklearn, Darts)
+│
+├── architectures/              # Model definitions
+│   ├── lstms.py                #   TidepoolLSTM, MirshekarianLSTM
+│   ├── iTransformer.py         #   Inverted Transformer
+│   ├── iTransformerMasked.py   #   Masked iTransformer (periodicity-aware)
+│   ├── BGiTransformer.py       #   Multi-task Transformer (forecast + alarm + imputation)
+│   └── layers/                 #   Embeddings, attention, encoder/decoder
+│
+├── experiments/                # Experiment configs and outputs
+├── standardized_datasets/      # Cached preprocessed data (pickled DataFrames)
+├── scripts/                    # Aggregation scripts (RMSE, CG-EGA, heatmaps)
+├── other_scripts/              # Utilities, tests, visualization tools
+├── CG-EGA/                     # Clarke/Consensus Error Grid Analysis (vendored)
+└── OpenLTM/                    # Open Long-Term Models (vendored, experimental)
+```
+
+## How It Works
+
+### Pipeline Flow
+
+```
+model_config.json
+    │
+    ▼
+main(config)                          # pipeline/orchestrator.py
+    ├── DataHandler.load_data()       # Load from dataset-specific loaders, cache as pickle
+    ├── DataPrepper → SequenceDataset # Normalize, create sliding windows, mask missing data
+    ├── train_model()                 # Temporal split → DataLoader → Trainer.train()
+    └── evaluate_model()              # Per-participant inference → metrics → CSV/JSON/PNG
+```
+
+### Configuration
+
+Each experiment is driven by a `model_config.json` with two sections:
+
+- **`hp_config`** — Model hyperparameters: `architecture`, `learning_rate`, `batch_size`, `feature_window`, `forecast_steps`, `hidden_dim`, `lstm_layers`, `mask_ratio`, etc.
+- **`run_config`** — Experiment settings: `experiment_path`, `dataset_names`, `dataloaders`, `features`, `targets`, `trainer`, `scaler`, `train`/`test` flags, `train_participants`, `test_participants`, etc.
+- **`alarm_calibration`** (optional) — Post-hoc alarm recalibration. See [ALARM_RECALIBRATION_USAGE.md](ALARM_RECALIBRATION_USAGE.md).
+
+See [.github/instructions/config.instructions.md](.github/instructions/config.instructions.md) for a complete field-by-field reference with types, defaults, and valid values.
+
+See `experiments/` subdirectories for example configs.
+
+### Supported Datasets
+
+| Dataset | Loader | Notes |
+|---------|--------|-------|
+| OhioT1DM (2018, 2020) | `DataloaderOhio` | CGM + insulin + meals + heart rate |
+| Tidepool SAP-100 | `DataloaderTidepoolSAP100` | 100 participants, sensor-augmented pump |
+| Tidepool HCL-150 | `DataloaderTidepoolHCL150` | 150 participants, hybrid closed-loop |
+| T1DEXI | `DataloaderT1DEXI` | Type 1 diabetes exercise study |
+| GlucoBench (5 sites) | `DataloaderGlucobench` | Colas, Broll, Hall, Dubosson, Weinstock |
+| Shanghai (T1DM, T2DM) | `DataloaderShanghai` | Chinese hospital cohort |
+| AI4Food | `DataloaderAI4Food` | Diet study |
+| Geneva | `DataloaderGeneva` | Feasibility study |
+
+### Supported Architectures
+
+| Architecture | Config name | Trainer |
+|---|---|---|
+| Multi-layer LSTM | `TidepoolLSTM` | `TrainerBasic` |
+| Baseline LSTM | `MirshekarianLSTM` | `TrainerBasic` |
+| Inverted Transformer | `iTransformer` | `Exp_Long_Term_Forecast` |
+| Masked iTransformer | `iTransformerMasked` | `Exp_Long_Term_Forecast` |
+| Multi-task Transformer | `BGiTransformer` | `Exp_Long_Term_Forecast` |
+| Linear Regression | — | `SciKitLinearRegressionModel` |
+
+### Evaluation Outputs
+
+After running with `"test": true`, the pipeline generates in `experiments/<name>/evaluation/`:
+
+| File | Contents |
+|------|----------|
+| `rmse_summary.csv` | Per-participant RMSE/MAE by horizon and glycemic zone |
+| `cg_ega_summary.csv` | CG-EGA accuracy (AP), bias (BE), error (EP) per horizon |
+| `event_level_summary_multi_threshold.csv` | Alarm precision/recall/F1 at multiple thresholds |
+| `calibration_summary.csv` | Uncertainty calibration (PICE, PICP) |
+| `alarm_calibration_metrics_*.json` | Brier score, ECE for hyper/hypoglycemia |
+| `aggregate_metrics.json` | Median MAE, MSE, RMSE across all samples |
+
+### Hyperparameter Sweeps
+
+Edit the `param_grid` dict in `run_multiple.py` or `run_multiple2.py`:
+
+```python
+param_grid = {
+    "learning_rate": [1e-3, 1e-4, 1e-5],
+    "batch_size": [32],
+    "feature_window": [48, 72, 96],
+    "hidden_dim": [512, 256, 128],
+    "dataset_config": ["all"],  # or ["ohio", "tidepool_sap100", ...]
+}
+```
+
+Each combination creates a subfolder like `run_lr-0.001_bs-32_fw-96_hd-512_...` with its own config, model, and results.
+
+### Missing Data Handling
+
+The pipeline uses sentinel values for missing/masked data:
+
+| Value | Meaning |
+|-------|---------|
+| `-9` | Missing or disabled feature |
+| `-8` | Padding marker |
+| `-6` | Masked patch (data augmentation) |
+| `-5` | Future forecast period |
+
+### Alarm Recalibration
+
+Post-hoc histogram binning recalibration is supported for alarm probabilities. See [ALARM_RECALIBRATION_USAGE.md](ALARM_RECALIBRATION_USAGE.md) for details.
+
+## Backwards Compatibility
+
+Root-level shim files (`datahandler.py`, `dataprepper.py`, `custom_dataset.py`, `scaler.py`, `evaluator.py`, `alarm_evaluation.py`, `forecast_evaluation.py`) re-export from their new package locations. Old imports like `from ml_pipeline import main` or `from datahandler import DataHandler` continue to work.
