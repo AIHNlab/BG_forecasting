@@ -1,6 +1,19 @@
 # Blood Glucose Forecasting
 
-A modular ML pipeline for blood glucose (BG) forecasting using LSTM and Transformer architectures. Supports training, evaluation, hyperparameter sweeps, alarm detection, and uncertainty calibration across 13+ clinical datasets.
+This repository accompanies the paper:
+
+> **Multi-task Transformer with Unified Clinical Tokenizer for Effective Blood Glucose Prediction**
+> Knut J. Strommen, Maria Panagiotou, Lorenzo Brigato, Stavroula Mougiakakou
+
+It contains the official implementation of **MT-UCT**, a multi-task encoder-only Transformer for blood glucose (BG) forecasting that combines a **Unified Clinical Tokenizer (UCT)** with a multi-task training objective (masked reconstruction, deterministic forecast, probabilistic forecast with uncertainty, and hypo-/hyperglycaemia alarm tokens). The codebase additionally provides the LSTM and linear-regression baselines used in the paper, in. addition to the training and evaluation pipelines used across 12 publicly available clinical datasets.
+
+## Highlights from the paper
+
+- **MT-UCT architecture** — encoder-only Transformer with histroical temporal tokens for CGM, carbohydrate intake, and bolus insulin; learnable demographic/clinical tokens (age, sex, BMI, diabetes type, treatment); and dedicated forecast / hypo / hyper task tokens. Implemented in [architectures/BGiTransformer.py](architectures/BGiTransformer.py).
+- **Multi-task training objective** — masked patch reconstruction (10% mask ratio), MSE forecast, Gaussian NLL uncertainty (with detached gradient at the encoder), and BCE alarm losses with soft sustained-event labels (1 h horizon, 3-step run rule). Implemented in [trainers/exp_long_term_forecasting.py](trainers/exp_long_term_forecasting.py).
+- **Long context** — trained on sequences of 2,304 time steps (~8 days at 5-minute sampling), enabling MT-UCT to exploit multi-day history that LSTMs cannot.
+- **Alarm system** — probabilistic early warnings for hypo-/hyperglycaemia with tunable thresholds, evaluated by event-level precision, recall, detection time, and daily false-alarm rate.
+- **12-dataset benchmark** — OhioT1DM, Broll, Colas, Dubosson, Hall, Weinstock, Tidepool SAP, Tidepool HCL, T1DEXI, AI4FoodDB, ShanghaiT1DM, ShanghaiT2DM.
 
 ## Quick Start
 
@@ -134,6 +147,8 @@ See `experiments/` subdirectories for example configs.
 | Multi-task Transformer | `BGiTransformer` | `Exp_Long_Term_Forecast` |
 | Linear Regression | — | `SciKitLinearRegressionModel` |
 
+`BGiTransformer` corresponds to the **MT-UCT** model from the paper. The two LSTM and linear-regression entries correspond to the baselines reported in the experiments.
+
 ### Evaluation Outputs
 
 After running with `"test": true`, the pipeline generates in `experiments/<name>/evaluation/`:
@@ -181,3 +196,20 @@ Post-hoc histogram binning recalibration is supported for alarm probabilities. S
 ## Backwards Compatibility
 
 Root-level shim files (`datahandler.py`, `dataprepper.py`, `custom_dataset.py`, `scaler.py`, `evaluator.py`, `alarm_evaluation.py`, `forecast_evaluation.py`) re-export from their new package locations. Old imports like `from ml_pipeline import main` or `from datahandler import DataHandler` continue to work.
+
+## Citation
+
+If you use this code or the MT-UCT model in your research, please cite:
+
+```bibtex
+@article{strommen2026mtuct,
+  title   = {Multi-task Transformer with Unified Clinical Tokenizer for Effective Blood Glucose Prediction},
+  author  = {Strommen, Knut J. and Panagiotou, Maria and Brigato, Lorenzo and Mougiakakou, Stavroula},
+  journal = {IEEE Journal of Biomedical and Health Informatics},
+  year    = {2026}
+}
+```
+
+## Acknowledgements
+
+This work was supported by the Stiftung Sanitas (Sanitas Diabetes Technologie 2.0 project) and by the European Commission together with the Swiss Confederation–State Secretariat for Education, Research and Innovation (SERI) under project 101057730 MELISSA (Mobile Artificial Intelligence Solution for Diabetes Adaptive Care). Tidepool data were accessed via Vivli, Inc.; Vivli has not contributed to or approved, and is not responsible for, the contents of this repository.
