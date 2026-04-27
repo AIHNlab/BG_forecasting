@@ -9,7 +9,7 @@ It contains the official implementation of **MT-UCT**, a multi-task encoder-only
 
 ## Highlights from the paper
 
-- **MT-UCT architecture** — encoder-only Transformer with histroical temporal tokens for CGM, carbohydrate intake, and bolus insulin; learnable demographic/clinical tokens (age, sex, BMI, diabetes type, treatment); and dedicated forecast / hypo / hyper task tokens. Implemented in [architectures/BGiTransformer.py](architectures/BGiTransformer.py).
+- **MT-UCT architecture** — encoder-only Transformer with historical temporal tokens for CGM, carbohydrate intake, and bolus insulin; learnable demographic/clinical tokens (age, sex, BMI, diabetes type, treatment); and dedicated forecast / hypo / hyper task tokens. Implemented in [architectures/MTUCT.py](architectures/MTUCT.py) (the `Model` class, with the UCT backbone in the `UCT` class).
 - **Multi-task training objective** — masked patch reconstruction (10% mask ratio), MSE forecast, Gaussian NLL uncertainty (with detached gradient at the encoder), and BCE alarm losses with soft sustained-event labels (1 h horizon, 3-step run rule). Implemented in [trainers/exp_long_term_forecasting.py](trainers/exp_long_term_forecasting.py).
 - **Long context** — trained on sequences of 2,304 time steps (~8 days at 5-minute sampling), enabling MT-UCT to exploit multi-day history that LSTMs cannot.
 - **Alarm system** — probabilistic early warnings for hypo-/hyperglycaemia with tunable thresholds, evaluated by event-level precision, recall, detection time, and daily false-alarm rate.
@@ -85,7 +85,8 @@ BG_forecasting/
 │   ├── lstms.py                #   TidepoolLSTM, MirshekarianLSTM
 │   ├── iTransformer.py         #   Inverted Transformer
 │   ├── iTransformerMasked.py   #   Masked iTransformer (periodicity-aware)
-│   ├── BGiTransformer.py       #   Multi-task Transformer (forecast + alarm + imputation)
+│   ├── MTUCT.py                #   MT-UCT: Multi-task Transformer w/ Unified Clinical Tokenizer
+│   ├── BGiTransformer.py       #   Backwards-compat shim re-exporting MTUCT
 │   └── layers/                 #   Embeddings, attention, encoder/decoder
 │
 ├── experiments/                # Experiment configs and outputs
@@ -144,10 +145,10 @@ See `experiments/` subdirectories for example configs.
 | Baseline LSTM | `MirshekarianLSTM` | `TrainerBasic` |
 | Inverted Transformer | `iTransformer` | `Exp_Long_Term_Forecast` |
 | Masked iTransformer | `iTransformerMasked` | `Exp_Long_Term_Forecast` |
-| Multi-task Transformer | `BGiTransformer` | `Exp_Long_Term_Forecast` |
+| **MT-UCT** (paper model) | `MTUCT` | `Exp_Long_Term_Forecast` |
 | Linear Regression | — | `SciKitLinearRegressionModel` |
 
-`BGiTransformer` corresponds to the **MT-UCT** model from the paper. The two LSTM and linear-regression entries correspond to the baselines reported in the experiments.
+`MTUCT` is the canonical config name for the paper's MT-UCT model. The legacy name `BGiTransformer` is still accepted as an alias so older `model_config.json` files keep working. The two LSTM and linear-regression entries correspond to the baselines reported in the experiments.
 
 ### Evaluation Outputs
 

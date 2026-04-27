@@ -26,7 +26,7 @@ Every experiment is driven by a `model_config.json` file with two required secti
 
 | Field | Type | Example | Description |
 |-------|------|---------|-------------|
-| `architecture` | string | `"iTransformerMasked"` | Model class to instantiate. Must match an imported class name. Valid values: `"TidepoolLSTM"`, `"MirshekarianLSTM"`, `"iTransformer"`, `"iTransformerMasked"`, `"BGiTransformer"`. |
+| `architecture` | string | `"iTransformerMasked"` | Model class to instantiate. Must match an imported class name. Valid values: `"TidepoolLSTM"`, `"MirshekarianLSTM"`, `"iTransformer"`, `"iTransformerMasked"`, `"MTUCT"` (paper model; `"BGiTransformer"` is accepted as a legacy alias). |
 | `model_tag` | string | `"Transformer"` | Descriptive label for experiment naming in hyperparameter sweeps. Not used by the pipeline itself. |
 
 #### Architecture ↔ Trainer Mapping
@@ -37,7 +37,7 @@ Every experiment is driven by a `model_config.json` file with two required secti
 | `MirshekarianLSTM` | `TrainerBasic` |
 | `iTransformer` | `Exp_Long_Term_Forecast` |
 | `iTransformerMasked` | `Exp_Long_Term_Forecast` |
-| `BGiTransformer` | `Exp_Long_Term_Forecast` |
+| `MTUCT` (alias: `BGiTransformer`) | `Exp_Long_Term_Forecast` |
 
 ### LSTM-Specific Parameters
 
@@ -51,7 +51,7 @@ These fields are only used when `architecture` is `TidepoolLSTM` or `Mirshekaria
 
 ### Transformer-Specific Parameters
 
-These fields are only used when `architecture` is `iTransformer`, `iTransformerMasked`, or `BGiTransformer`:
+These fields are only used when `architecture` is `iTransformer`, `iTransformerMasked`, or `MTUCT` (legacy alias `BGiTransformer`):
 
 | Field | Type | Example | Description |
 |-------|------|---------|-------------|

@@ -9,7 +9,7 @@ This is a blood glucose forecasting ML pipeline. Code is organized into packages
 - `evaluation/` — forecast metrics (RMSE, CG-EGA), alarm metrics, uncertainty calibration
 - `dataloaders/` — one loader per dataset, all inherit from `dataloaders.dataloader.Dataloader` (ABC)
 - `trainers/` — training loops: `TrainerBasic` (LSTM), `Exp_Long_Term_Forecast` (Transformers), `SciKitLinearRegressionModel`
-- `architectures/` — model definitions: `TidepoolLSTM`, `iTransformer`, `iTransformerMasked`, `BGiTransformer`
+- `architectures/` — model definitions: `TidepoolLSTM`, `iTransformer`, `iTransformerMasked`, `MTUCT` (paper model; `BGiTransformer` is a legacy alias re-exporting from `MTUCT`)
 
 Root-level files like `ml_pipeline.py`, `datahandler.py`, `dataprepper.py` etc. are **backwards-compatibility shims** that re-export from the packages above. Do not add new code to them.
 

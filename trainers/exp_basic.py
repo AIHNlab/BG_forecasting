@@ -2,7 +2,7 @@ import os
 import torch
 #from model import Transformer, Informer, Reformer, Flowformer, Flashformer, \
 #    iTransformer, iInformer, iReformer, iFlowformer, iFlashformer
-from architectures import  iTransformer, BGiTransformer, iTransformerMasked
+from architectures import  iTransformer, BGiTransformer, iTransformerMasked, MTUCT
 
 class Exp_Basic(object):
     def __init__(self, args):
@@ -14,6 +14,9 @@ class Exp_Basic(object):
             #'Flowformer': Flowformer,
             #'Flashformer': Flashformer,
             'iTransformer': iTransformer,
+            # ``MTUCT`` is the canonical name from the paper; ``BGiTransformer``
+            # is kept as a backwards-compatible alias for legacy configs.
+            'MTUCT': MTUCT,
             'BGiTransformer': BGiTransformer,
             'iTransformerMasked': iTransformerMasked,
             #'iInformer': iInformer,

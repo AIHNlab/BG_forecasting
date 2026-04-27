@@ -1,112 +1,15 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from .layers.Transformer_EncDec import Encoder, EncoderLayer
-from .layers.SelfAttention_Family import FullAttention, AttentionLayer
-from .layers.Embed import DataEmbedding_inverted
-import numpy as np
+"""Backwards-compatible shim for the legacy ``BGiTransformer`` module name.
 
+The model previously known as ``BGiTransformer`` was renamed to ``MTUCT``
+(Multi-task Transformer with Unified Clinical Tokenizer) to match the
+terminology used in the accompanying paper. This module re-exports the
+public symbols so that existing experiment configs (``"architecture":
+"BGiTransformer"``) and any external imports of the form
+``from architectures import BGiTransformer`` continue to work.
 
-class Model(nn.Module):
-    def __init__(self, configs):
-        super(Model, self).__init__()
-        self.encoder_model = EncoderModel(configs)
-        self.forecast_head = TaskHead(configs, configs.pred_len)
-        self.imputation_head = TaskHead(configs, configs.seq_len)
-        self.alarm_head = TaskHead(configs, configs.pred_len)
-        self.uncertainty_forecast_head = TaskHead(configs, configs.pred_len, output_activation=nn.Softplus())
-        self.uncertainty_imputation_head = TaskHead(configs, configs.seq_len, output_activation=nn.Softplus())
-        self.pred_len = configs.pred_len
-        self.use_norm = configs.use_norm
+New code should import :mod:`architectures.MTUCT` directly.
+"""
 
-    def forecast(self, x_enc, x_mark_enc, x_dec, x_mark_dec):
-        if self.use_norm:
-            enc_out, means, stdev = self.encoder_model(x_enc, x_mark_enc)
-            _, _, N = x_enc.shape
-            forecast_output = self.forecast_head(enc_out, means, stdev, N)
-            imputation_output = self.imputation_head(enc_out, means, stdev, N)
-            alarm_output = self.alarm_head(enc_out, means, stdev, N)
-            uncertainty_forecast_output = self.uncertainty_forecast_head(enc_out, means, stdev, N)
-            uncertainty_imputation_output = self.uncertainty_imputation_head(enc_out, means, stdev, N)
-            return forecast_output, imputation_output, alarm_output, uncertainty_forecast_output, uncertainty_imputation_output
-        else:
-            enc_out = self.encoder_model(x_enc, x_mark_enc)
-            _, _, N = x_enc.shape
-            forecast_output = self.forecast_head(enc_out, N)
-            imputation_output = self.imputation_head(enc_out, N)
-            alarm_output = self.alarm_head(enc_out, N)
-            uncertainty_forecast_output = self.uncertainty_forecast_head(enc_out, N)
-            uncertainty_imputation_output = self.uncertainty_imputation_head(enc_out, N)
-            return forecast_output, imputation_output, alarm_output, uncertainty_forecast_output, uncertainty_imputation_output
+from .MTUCT import Model, UCT, TaskHead, EncoderModel  # noqa: F401
 
-
-    def forward(self, x_enc, x_mark_enc, x_dec, x_mark_dec, mask=None):
-        dec_out = self.forecast(x_enc, x_mark_enc, x_dec, x_mark_dec)
-        #return dec_out[:, -self.pred_len:, :] #Not sure I understand the point of this slicing...
-        return dec_out
-
-    def freeze_encoder(self):
-        self.encoder_model.freeze_encoder()
-
-class EncoderModel(nn.Module):
-    def __init__(self, configs):
-        super(EncoderModel, self).__init__()
-        self.seq_len = configs.seq_len
-        self.output_attention = configs.output_attention
-        self.use_norm = configs.use_norm
-        # Embedding
-        self.enc_embedding = DataEmbedding_inverted(configs.seq_len, configs.d_model, configs.embed, configs.freq,
-                                                    configs.dropout)
-        # Encoder
-        self.encoder = Encoder(
-            [
-                EncoderLayer(
-                    AttentionLayer(
-                        FullAttention(False, configs.factor, attention_dropout=configs.dropout,
-                                      output_attention=configs.output_attention), configs.d_model, configs.n_heads),
-                    configs.d_model,
-                    configs.d_ff,
-                    dropout=configs.dropout,
-                    activation=configs.activation
-                ) for l in range(configs.e_layers)
-            ],
-            norm_layer=torch.nn.LayerNorm(configs.d_model)
-        )
-
-    def forward(self, x_enc, x_mark_enc):
-        if self.use_norm:
-            means = x_enc.mean(1, keepdim=True).detach()
-            x_enc = x_enc - means
-            stdev = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
-            x_enc /= stdev
-
-        enc_out = self.enc_embedding(x_enc, x_mark_enc)
-        enc_out, attns = self.encoder(enc_out, attn_mask=None)
-        if self.use_norm:
-            return enc_out, means, stdev
-        else:
-            return enc_out
-
-    def freeze_encoder(self):
-        for param in self.encoder.parameters():
-            param.requires_grad = False
-
-class TaskHead(nn.Module):
-    def __init__(self, configs, output_len, output_activation='linear'):
-        super(TaskHead, self).__init__()
-        self.pred_len = output_len
-        self.use_norm = configs.use_norm
-        self.projector = nn.Linear(configs.d_model, output_len, bias=True)
-        if output_activation == 'linear':
-            self.output_activation = lambda x: x
-        else:
-            self.output_activation = output_activation
-
-    def forward(self, enc_out, means=None, stdev=None, N=None):
-        dec_out = self.projector(enc_out).permute(0, 2, 1)[:, :, :N]
-
-        if self.use_norm:
-            dec_out = dec_out * (stdev[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
-            dec_out = dec_out + (means[:, 0, :].unsqueeze(1).repeat(1, self.pred_len, 1))
-        dec_out = self.output_activation(dec_out)
-        return dec_out#[:,:,:1]
+__all__ = ["Model", "UCT", "TaskHead", "EncoderModel"]
