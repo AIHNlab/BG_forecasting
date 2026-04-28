@@ -198,18 +198,12 @@ Post-hoc histogram binning recalibration is supported for alarm probabilities. S
 
 Root-level shim files (`datahandler.py`, `dataprepper.py`, `custom_dataset.py`, `scaler.py`, `evaluator.py`, `alarm_evaluation.py`, `forecast_evaluation.py`) re-export from their new package locations. Old imports like `from ml_pipeline import main` or `from datahandler import DataHandler` continue to work.
 
-## Citation
+## License
 
-If you use this code or the MT-UCT model in your research, please cite:
+Copyright © 2026 University of Bern, ARTORG Center for Biomedical Engineering Research, Authors: Knut J. Strommen, Maria Panagiotou, Lorenzo Brigato, Stavroula Mougiakakou
 
-```bibtex
-@article{strommen2026mtuct,
-  title   = {Multi-task Transformer with Unified Clinical Tokenizer for Effective Blood Glucose Prediction},
-  author  = {Strommen, Knut J. and Panagiotou, Maria and Brigato, Lorenzo and Mougiakakou, Stavroula},
-  journal = {IEEE Journal of Biomedical and Health Informatics},
-  year    = {2026}
-}
-```
+The code is licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at [![Apache 2.0 License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0.txt)
+
 
 ## Acknowledgements
 
