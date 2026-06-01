@@ -94,6 +94,7 @@ def evaluate_cg_ega_horizon(pred_horizon, actual_horizon, participant, horizon, 
     })
     cg_ega = CG_EGA(results, freq)
     ap, be, ep = cg_ega.reduced()
+    ap_hypo, be_hypo, ep_hypo, ap_eu, be_eu, ep_eu, ap_hyper, be_hyper, ep_hyper = cg_ega.simplified()
     print(f"Participant {participant} - Horizon {horizon} CG-EGA: AP={ap:.3f}, BE={be:.3f}, EP={ep:.3f}")
     if plot_day is not None:
         evaluation_path = _PROJECT_ROOT+os.sep+os.path.join(config['run_config']['experiment_path'], 'evaluation', str(participant), f'horizon_{horizon}')
@@ -104,7 +105,7 @@ def evaluate_cg_ega_horizon(pred_horizon, actual_horizon, participant, horizon, 
             print(f"Warning: CG-EGA plot failed for participant {participant}, horizon {horizon}, day {plot_day}: {e}")
         plt.savefig(os.path.join(evaluation_path, f'cg_ega_day{plot_day}.png'))
         plt.close()
-    return ap, be, ep
+    return ap, be, ep, ap_hypo, be_hypo, ep_hypo, ap_eu, be_eu, ep_eu, ap_hyper, be_hyper, ep_hyper
 
 def evaluate_uncertainty_calibration(y_true, mu, sigma, participant, horizon, config, confidence_levels=None, plot=True):
     import numpy as np

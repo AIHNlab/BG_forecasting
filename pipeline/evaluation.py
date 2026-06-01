@@ -362,10 +362,10 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
             rmse_values[f'MAE_normo_{horizon}'] = rmse.get("mae_normo", np.nan) if not pd.isna(rmse.get("mae_normo", np.nan)) else np.nan
 
             # --- CG-EGA per horizon ---
-            ap, be, ep = evaluate_cg_ega_horizon(
+            ap, be, ep, ap_hypo, be_hypo, ep_hypo, ap_eu, be_eu, ep_eu, ap_hyper, be_hyper, ep_hyper = evaluate_cg_ega_horizon(
                 pred_horizon, actual_horizon, participant, horizon, config, freq=5, plot_day=1
             )
-            cg_ega_metrics[horizon].append((ap, be, ep))
+            cg_ega_metrics[horizon].append((ap, be, ep, ap_hypo, be_hypo, ep_hypo, ap_eu, be_eu, ep_eu, ap_hyper, be_hyper, ep_hyper))
             cg_ega_df = pd.concat([
                 cg_ega_df,
                 pd.DataFrame([{
@@ -373,7 +373,16 @@ def evaluate_model(config, dataframes, scaler_class_x, scaler_class_y, participa
                     'Horizon': horizon,
                     'AP': ap,
                     'BE': be,
-                    'EP': ep
+                    'EP': ep,
+                    'AP_hypo': ap_hypo,
+                    'BE_hypo': be_hypo,
+                    'EP_hypo': ep_hypo,
+                    'AP_eu': ap_eu,
+                    'BE_eu': be_eu,
+                    'EP_eu': ep_eu,
+                    'AP_hyper': ap_hyper,
+                    'BE_hyper': be_hyper,
+                    'EP_hyper': ep_hyper
                 }])
             ], ignore_index=True)
             # Apply same masking as RMSE eval
