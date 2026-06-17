@@ -2,7 +2,7 @@
 
 This repository accompanies the paper:
 
-> **Multi-task Transformer with Unified Clinical Tokenizer for Effective Blood Glucose Prediction**
+> **Scaling Clinical Context in Blood Glucose Forecasting with Multi-task Transformers and Unified Clinical Tokenization**
 > Knut J. Strommen, Maria Panagiotou, Lorenzo Brigato, Stavroula Mougiakakou
 
 It contains the official implementation of **MT-UCT**, a multi-task encoder-only Transformer for blood glucose (BG) forecasting that combines a **Unified Clinical Tokenizer (UCT)** with a multi-task training objective (masked reconstruction, deterministic forecast, probabilistic forecast with uncertainty, and hypo-/hyperglycaemia alarm tokens). The codebase additionally provides the LSTM and linear-regression baselines used in the paper, in. addition to the training and evaluation pipelines used across 12 publicly available clinical datasets.
