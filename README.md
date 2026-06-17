@@ -2,7 +2,7 @@
 
 This repository accompanies the paper:
 
-> **Scaling Clinical Context in Blood Glucose Forecasting with Multi-task Transformers and Unified Clinical Tokenization**
+> **Scaling Context in Blood Glucose Forecasting with Multi-task Transformers and Unified Clinical Tokenization**
 
 > Knut J. Strommen, Maria Panagiotou, Lorenzo Brigato, Stavroula Mougiakakou
 
