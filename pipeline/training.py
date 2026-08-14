@@ -25,6 +25,7 @@ from utils import IdentityTransformer
 from trainers.trainer_basic import TrainerBasic
 from trainers.exp_long_term_forecasting import Exp_Long_Term_Forecast
 from trainers.trainer_linreg import DartsLinearRegressionModel, SciKitLinearRegressionModel
+from trainers.trainer_zeroshot import TrainerChronos, TrainerTimeLLM
 
 from pipeline.orchestrator import init_experiment_directory
 
