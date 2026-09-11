@@ -14,3 +14,6 @@
 *.txt
 *events.out*
 .venv*
+
+# Saved forecast runs (per-request output)
+forecast_runs/

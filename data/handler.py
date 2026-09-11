@@ -21,6 +21,7 @@ from dataloaders.dataloader_glucobench import DataloaderGlucobench
 from dataloaders.dataloader_shanghai import DataloaderShanghai
 from dataloaders.dataloader_ai4food import DataloaderAI4Food
 from dataloaders.dataloader_geneva import DataloaderGeneva
+from dataloaders.dataloader_melissa import DataloaderMelissa
 
 
 class DataHandler:
