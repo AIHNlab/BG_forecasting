@@ -6,7 +6,6 @@ import torch.optim as optim
 from architectures.lstms import MirshekarianLSTM, TidepoolLSTM
 import numpy as np
 import matplotlib.pyplot as plt
-from torchsummary import summary
 
 class TrainerBasic:
     def __init__(self, hp_config, model_path, parent_model=None,retrain_model=True):
@@ -17,6 +16,7 @@ class TrainerBasic:
                 os.makedirs(pretrained_model_dir)
             model.load_state_dict(torch.load(parent_model))
         self.model = model
+        self.hp_config = hp_config
         self.criterion = nn.MSELoss()
         self.optimizer = optim.Adam(model.parameters(), lr=hp_config['learning_rate'])
         self.num_epochs = hp_config['num_epochs']
@@ -110,8 +110,7 @@ class TrainerBasic:
                 # Save the model summary
                 summary_path = os.path.join(model_dir, 'model_summary.txt')
                 with open(summary_path, 'w', encoding='utf-8') as f:
-                    summary_str = summary(self.model, input_size=(3, 224, 224))  # Adjust input_size as per your model's requirement
-                    f.write(str(summary_str))
+                    f.write(str(self.model))
                 # Save the best validation loss (and epoch) to a file for later reference
                 best_loss_path = os.path.join(model_dir, 'best_val_loss.txt')
                 try:

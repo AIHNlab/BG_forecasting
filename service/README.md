@@ -14,8 +14,11 @@ changing it. The only edit to existing code is one early-return branch in
 ## Setup
 
 ```bash
-conda activate forecasting          # the project's existing environment
+source ../.venv/bin/activate        # the project's existing environment, from BG_forecasting/
 ```
+
+(If your checkout uses a conda env instead of `.venv`, activate that — the service has no
+dependencies beyond what the training/evaluation pipeline already requires.)
 
 No web framework is required — there is no HTTP server yet, only a library and a CLI.
 
@@ -23,11 +26,14 @@ No web framework is required — there is no HTTP server yet, only a library and
 
 ## Quickstart
 
+Run from the `BG_forecasting/` repo root. The sample bundle lives nested under the dataset
+directory, not at the `--model-dir` default (see the [CLI](#cli) table), so pass it explicitly:
+
 ```bash
-cd /home/maria/code/BG_forecasting
 python -m service \
   --csv standardized_datasets/MELISSA_user001/test/cgm_20260917T235500Z.csv \
-  --user-id MELISSA_user001 --horizon 30
+  --user-id MELISSA_user001 --horizon 30 \
+  --model-dir standardized_datasets/MELISSA_user001/inference/test
 ```
 
 ```
@@ -38,7 +44,7 @@ MELISSA_user001,2026-09-17T23:55:00+00:00,2026-09-18T00:05:00+00:00,10,122.78,19
 ```
 
 ```
-/home/maria/code/BG_forecasting/forecast_runs/MELISSA_user001/20260911T123543_c6a7af719302
+<repo-root>/BG_forecasting/forecast_runs/MELISSA_user001/20260911T123543_c6a7af719302
 ```
 
 **Every run is saved.** stdout is the run directory; the forecast itself is written
@@ -53,7 +59,7 @@ From **any** directory, put the repo root on the path — `python -m` resolves t
 package before the module can fix `sys.path` itself:
 
 ```bash
-PYTHONPATH=/home/maria/code/BG_forecasting python -m service --csv history.csv --user-id MELISSA_user001
+PYTHONPATH=<repo-root>/BG_forecasting python -m service --csv history.csv --user-id MELISSA_user001
 ```
 
 Progress, warnings and the event risk always go to stderr, so with `--stdout` or
@@ -69,7 +75,7 @@ Progress, warnings and the event risk always go to stderr, so with `--stdout` or
 | `--user-id` | must match the CSV's `user_id` column (required) |
 | `--horizon` | 30 / 60 / 120 minutes → 6 / 12 / 24 steps (default 30) |
 | `--format` | format used by `--stdout`: `csv` (default) or `json`. Both are always saved |
-| `--model-dir` | bundle directory (default `inference/test`) |
+| `--model-dir` | bundle directory, relative to the repo root (default `inference/test`; the MELISSA sample bundle is nested at `standardized_datasets/MELISSA_user001/inference/test`, not the default — pass it explicitly) |
 | `--output-dir` | where runs are saved (default `forecast_runs/`) |
 | `--no-save` | write nothing; print the forecast instead |
 | `--stdout` | also print the forecast, for piping |
@@ -112,7 +118,10 @@ from pipeline.config import build_forecast_config
 from pipeline.orchestrator import main
 from service.bundle import load_config
 
-config = build_forecast_config(load_config('inference/test'), model_dir='inference/test',
+# model_dir here is the MELISSA sample bundle's actual (nested) location -- see the
+# --model-dir row in the CLI table above.
+model_dir = 'standardized_datasets/MELISSA_user001/inference/test'
+config = build_forecast_config(load_config(model_dir), model_dir=model_dir,
                                csv_path='history.csv', user_id='MELISSA_user001',
                                horizon_minutes=60, output_dir='forecast_runs')
 result = main(config)
