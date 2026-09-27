@@ -14,7 +14,7 @@ Developed and tested against the MELISSA sample CSVs in
 |---|---|
 | D1 | Short histories supported (less than the 8-day window). |
 | D2 | Forecast only — no backtest, no metrics on the request path. |
-| D3 | Keep the latest observation; use the latest `feature_window - forecast_steps` history rows to match training. |
+| D3 | Use the latest `feature_window - forecast_steps` history rows; retain the latest observation. |
 | D4 | Discard no batch — every window fed returns a prediction. |
 | D5 | Existing training/evaluation behaviour preserved. All changes additive. |
 | D6 | Dataloader name: `DataloaderMelissa`. |
@@ -115,9 +115,8 @@ in memory. **There is no retention or cleanup policy**, and runs hold per-user g
 **Forecast path:** CSV → `DataloaderMelissa` → `DataPrepper` **unmodified** → slice
 `input_data[-2280:]` → `PeriodicityReshape` → `model(...)` → inverse-transform.
 
-**Why this shape:** calling `DataPrepper` unmodified preserves preprocessing. The service uses
-`feature_window - forecast_steps` history rows, matching training (2280 for this bundle),
-but slices from the newest end to satisfy D3. No observations are removed from the end.
+**Why this shape:** preprocessing is unchanged; the latest `feature_window - forecast_steps`
+rows match training history length while retaining the newest observation (D3).
 Calling the model directly instead of `trainer.test` satisfies D4 with `test()` untouched.
 
 **Preventing a refit without touching shared code:** `ForecastOnlyScaler(StandardScaler)` overrides
@@ -127,10 +126,9 @@ is written; on the normal path `load_scaler` rebinds to the loaded scaler and th
 The parameter comparison that follows is a *consistency* check against swapped artifacts — matching
 means and scales would not, on its own, prove nothing was fitted.
 
-**Accepted costs:** `DataPrepper` still builds a `SequenceDataset` the path discards, but the
-service sets its stride to the upload row count so at most one candidate is checked.
-This avoids the full historical-window scan without changing the prepared arrays.
-Both scalers are still read from disk per request — the warm runtime holds the **model only**.
+**Accepted costs:** `DataPrepper` still builds a discarded `SequenceDataset`, but a service-only
+stride equal to the upload length limits its window search to at most one candidate.
+Both scalers are still re-read per request — the warm runtime holds the **model only**.
 
 ### Running it
 
@@ -181,18 +179,15 @@ Each of these was reproduced and confirmed against the MELISSA CSV and the bundl
 
 - Choose a web framework and add it to [requirements.txt](requirements.txt). Endpoints are a thin
   layer over `Forecaster.forecast(user_id, csv_path, horizon_minutes)`.
-- Focused automated tests now cover input length/alignment, padding, stride equivalence and
-  pipeline import compatibility. Run `python -m unittest discover -s tests -v`;
-  these tests generate their own fixtures and need no external dataset or model bundle.
-  The other manual checks above are not all covered by this suite.
+- **No automated test suite.** The behaviour above was verified manually; there is nothing guarding
+  it against regressions.
 - Deferred: `GET /v1/forecasts/{run_id}/event-risk` (a read of a stored run — never a recompute;
   must carry `run_id`, `forecast_origin`, `model_version`).
 - **No retention or cleanup for saved runs**, which are now written by default. Runs accumulate
   indefinitely and contain per-user glucose data; decide on a policy before any real volume.
 - A read-only bundle directory remains useful deployment hardening, though the service no longer
   depends on it.
-- History length now matches training: 2280 rather than 2304 (285 rather than 288 feature
-  tokens). A synthetic comparison changed point predictions by up to 13.14 mg/dL; this does
-  not establish improved accuracy. The centred-smoothing skew still requires offline runs
-  with history truncated at each origin. Interval widths remain **unattributed**.
+- History length now matches training (2280 rows); improved accuracy remains unverified.
+  Centred-smoothing skew still requires offline runs truncated at each origin.
+  Interval widths remain **unattributed**.
 - Swap in the MELISSA bundle when re-obtained — one `model_dir` change.
