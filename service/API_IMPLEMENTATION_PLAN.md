@@ -182,8 +182,8 @@ Each of these was reproduced and confirmed against the MELISSA CSV and the bundl
 - Choose a web framework and add it to [requirements.txt](requirements.txt). Endpoints are a thin
   layer over `Forecaster.forecast(user_id, csv_path, horizon_minutes)`.
 - Focused automated tests now cover input length/alignment, padding, stride equivalence and
-  pipeline import compatibility. Set `BG_FORECAST_TEST_ZIP` when running
-  `python -m unittest discover -s tests -v` to include all 36 synthetic forecasts and a CLI check.
+  pipeline import compatibility. Run `python -m unittest discover -s tests -v`;
+  these tests generate their own fixtures and need no external dataset or model bundle.
   The other manual checks above are not all covered by this suite.
 - Deferred: `GET /v1/forecasts/{run_id}/event-risk` (a read of a stored run — never a recompute;
   must carry `run_id`, `forecast_origin`, `model_version`).

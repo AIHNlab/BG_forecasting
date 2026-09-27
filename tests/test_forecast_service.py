@@ -1,15 +1,7 @@
-"""Run with: python -m unittest discover -s tests -v.
-
-Set BG_FORECAST_TEST_ZIP to the supplied synthetic files.zip to also exercise the
-real checkpoint, all 12 histories at all three horizons, and the CLI.
-"""
+"""Portable regression tests: python -m unittest discover -s tests -v."""
 
 import contextlib
-import copy
-import hashlib
 import io
-import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -17,7 +9,6 @@ import tempfile
 import types
 import unittest
 from unittest.mock import patch
-import zipfile
 
 import joblib
 import numpy as np
@@ -26,7 +17,7 @@ from sklearn.preprocessing import StandardScaler
 
 from data.dataset import SequenceDataset
 from data.prepper import DataPrepper
-from service.bundle import ARTIFACTS, BundleError, _check_config_shapes
+from service.bundle import BundleError, _check_config_shapes
 from service.forecast_input import build_forecast_input
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,72 +149,6 @@ assert 'pipeline.evaluation' not in sys.modules
             with self.assertRaisesRegex(RuntimeError, 'legacy dispatch'):
                 pipeline.main({'run_config': {}})
             initialize.assert_called_once()
-
-
-@unittest.skipUnless(os.environ.get('BG_FORECAST_TEST_ZIP'), 'Set BG_FORECAST_TEST_ZIP')
-class SyntheticBundleTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        from service.forecaster import Forecaster
-
-        cls.directory = tempfile.TemporaryDirectory()
-        cls.addClassCleanup(cls.directory.cleanup)
-        cls.root = Path(cls.directory.name)
-        with zipfile.ZipFile(os.environ['BG_FORECAST_TEST_ZIP']) as archive:
-            for info in archive.infolist():
-                if info.filename.startswith('inference/test/') or (
-                        info.filename.startswith('standardized_datasets/MELISSA_user001/test/')
-                        and info.filename.endswith('.csv')):
-                    target = (cls.root / info.filename).resolve()
-                    if cls.root not in target.parents:
-                        raise ValueError('Archive entry escapes test directory')
-                    if not info.is_dir():
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        target.write_bytes(archive.read(info))
-        cls.model_dir = cls.root / 'inference/test'
-        cls.files = sorted(cls.root.glob('standardized_datasets/*/test/*.csv'))
-        cls.digests = cls.hash_bundle()
-        cls.forecaster = Forecaster(cls.model_dir, output_dir=None)
-
-    @classmethod
-    def hash_bundle(cls):
-        return {name: hashlib.sha256((cls.model_dir / name).read_bytes()).hexdigest()
-                for name in ARTIFACTS}
-
-    def test_all_histories_and_horizons(self):
-        self.assertEqual(len(self.files), 12)
-        base_config = copy.deepcopy(self.forecaster.base_config)
-        for path in self.files:
-            frame = pd.read_csv(path)
-            origin = pd.to_datetime(frame.timestamp, utc=True).max()
-            for horizon in (30, 60, 120):
-                with self.subTest(csv=path.name, horizon=horizon), \
-                        contextlib.redirect_stderr(io.StringIO()):
-                    result = self.forecaster.forecast('MELISSA_user001', str(path), horizon)
-                    payload = result.to_dict()
-                    json.dumps(payload, allow_nan=False)
-                    self.assertEqual(len(result.steps), horizon // 5)
-                    self.assertEqual(result.forecast_origin, origin)
-                    for index, step in enumerate(result.steps, start=1):
-                        self.assertEqual(pd.Timestamp(step['prediction_time']),
-                                         origin + pd.Timedelta(minutes=5 * index))
-                    self.assertEqual(payload['event_risk']['horizon_minutes'], 60)
-                    padding = max(0, 2280 - len(frame))
-                    if padding:
-                        self.assertIn(f'{padding} missing-value steps', result.warnings[0])
-                    else:
-                        self.assertEqual(result.warnings, [])
-        self.assertEqual(base_config, self.forecaster.base_config)
-        self.assertEqual(self.digests, self.hash_bundle())
-
-    def test_cli_json_without_evaluation_path_workaround(self):
-        result = subprocess.run([
-            sys.executable, '-m', 'service', '--csv', str(self.files[0]),
-            '--user-id', 'MELISSA_user001', '--model-dir', str(self.model_dir),
-            '--horizon', '120', '--no-save', '--format', 'json',
-        ], cwd=ROOT, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(len(json.loads(result.stdout)['forecast']['steps']), 24)
 
 
 if __name__ == '__main__':

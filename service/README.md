@@ -27,14 +27,13 @@ No web framework is required — there is no HTTP server yet, only a library and
 
 ## Quickstart
 
-Run from the `BG_forecasting/` repo root after extracting the supplied `files.zip`
-there. It contains the sample bundle at the default `inference/test` location:
+Run from the `BG_forecasting/` repo root, supplying your CSV and model bundle paths:
 
 ```bash
 python -m service \
-  --csv standardized_datasets/MELISSA_user001/test/cgm_20260917T235500Z.csv \
+  --csv /path/to/history.csv \
   --user-id MELISSA_user001 --horizon 30 \
-  --model-dir inference/test
+  --model-dir /path/to/model-bundle
 ```
 
 ```
@@ -119,8 +118,8 @@ from pipeline.config import build_forecast_config
 from pipeline.orchestrator import main
 from service.bundle import load_config
 
-# From the repository root after extracting files.zip.
-model_dir = 'inference/test'
+# Directory containing your checkpoint, scalers, and model_config.json.
+model_dir = '/path/to/model-bundle'
 config = build_forecast_config(load_config(model_dir), model_dir=model_dir,
                                csv_path='history.csv', user_id='MELISSA_user001',
                                horizon_minutes=60, output_dir='forecast_runs')
@@ -358,12 +357,11 @@ Confirmed manually against the MELISSA CSV and the `inference/test` bundle:
 
 Focused regression tests cover input alignment/padding, preprocessing equivalence
 with the original stride, at most one discarded window check, and pipeline import
-compatibility:
+compatibility. They generate their own fixtures and need no external dataset or
+model bundle:
 
 ```bash
 python -m unittest discover -s tests -v
-# Also exercise all 12 synthetic histories at 30/60/120 minutes and the CLI:
-BG_FORECAST_TEST_ZIP=/path/to/files.zip python -m unittest discover -s tests -v
 ```
 
 The shared preprocessing is unchanged. The service uses a large dataset stride
