@@ -5,8 +5,9 @@ iTransformerMasked checkpoint. Returns a per-step trajectory with uncertainty, p
 a separate hypo/hyper event risk.
 
 This package is **additive**: it calls the training/evaluation pipeline without
-changing it. The only edit to existing code is one early-return branch in
-`pipeline.orchestrator.main`. Design rationale lives in
+changing its training/evaluation calculations. Forecast dispatch returns early in
+`pipeline.orchestrator.main`; the package loads evaluation exports lazily so
+forecasting does not require `cg_ega`. Design rationale lives in
 [API_IMPLEMENTATION_PLAN.md](API_IMPLEMENTATION_PLAN.md).
 
 ---
@@ -26,14 +27,14 @@ No web framework is required — there is no HTTP server yet, only a library and
 
 ## Quickstart
 
-Run from the `BG_forecasting/` repo root. The sample bundle lives nested under the dataset
-directory, not at the `--model-dir` default (see the [CLI](#cli) table), so pass it explicitly:
+Run from the `BG_forecasting/` repo root after extracting the supplied `files.zip`
+there. It contains the sample bundle at the default `inference/test` location:
 
 ```bash
 python -m service \
   --csv standardized_datasets/MELISSA_user001/test/cgm_20260917T235500Z.csv \
   --user-id MELISSA_user001 --horizon 30 \
-  --model-dir standardized_datasets/MELISSA_user001/inference/test
+  --model-dir inference/test
 ```
 
 ```
@@ -75,7 +76,7 @@ Progress, warnings and the event risk always go to stderr, so with `--stdout` or
 | `--user-id` | must match the CSV's `user_id` column (required) |
 | `--horizon` | 30 / 60 / 120 minutes → 6 / 12 / 24 steps (default 30) |
 | `--format` | format used by `--stdout`: `csv` (default) or `json`. Both are always saved |
-| `--model-dir` | bundle directory, relative to the repo root (default `inference/test`; the MELISSA sample bundle is nested at `standardized_datasets/MELISSA_user001/inference/test`, not the default — pass it explicitly) |
+| `--model-dir` | bundle directory (default: `inference/test` at the repo root; explicit relative paths resolve from the current directory) |
 | `--output-dir` | where runs are saved (default `forecast_runs/`) |
 | `--no-save` | write nothing; print the forecast instead |
 | `--stdout` | also print the forecast, for piping |
@@ -118,9 +119,8 @@ from pipeline.config import build_forecast_config
 from pipeline.orchestrator import main
 from service.bundle import load_config
 
-# model_dir here is the MELISSA sample bundle's actual (nested) location -- see the
-# --model-dir row in the CLI table above.
-model_dir = 'standardized_datasets/MELISSA_user001/inference/test'
+# From the repository root after extracting files.zip.
+model_dir = 'inference/test'
 config = build_forecast_config(load_config(model_dir), model_dir=model_dir,
                                csv_path='history.csv', user_id='MELISSA_user001',
                                horizon_minutes=60, output_dir='forecast_runs')
@@ -153,9 +153,13 @@ than silently degraded.
 and zero both count as missing — the pipeline converts exact zeros to missing
 values, so write blanks for gaps, never `0`.
 
-Histories shorter than 2304 samples (8 days) are left-padded with the model's
-missing-value token. This works, but accuracy at very short histories is not
-validated.
+The model receives the latest `feature_window - forecast_steps` samples: **2280**
+for the supplied bundle. Training reserves the remaining 24 positions of its
+2304-position window for future targets. The service matches that history length
+while retaining the newest observation; forecasts still start five minutes after it.
+Shorter histories are left-padded with the model's missing-value token. This changes
+predictions compared with the previous 2304-sample service input; improved accuracy
+has not been established, and accuracy at very short histories is not validated.
 
 ```csv
 user_id,timestamp,cbg,diagnosis_type,biological_sex,age,bmi,bolus,basal,carbInput,insulin_treatment
@@ -352,8 +356,19 @@ Confirmed manually against the MELISSA CSV and the `inference/test` bundle:
   behaves exactly as before, and importing `pipeline.orchestrator` loads no service
   module.
 
-> **There is no automated test suite.** The above was checked by hand, so nothing
-> guards it against regressions — worth adding before this is relied upon.
+Focused regression tests cover input alignment/padding, preprocessing equivalence
+with the original stride, at most one discarded window check, and pipeline import
+compatibility:
+
+```bash
+python -m unittest discover -s tests -v
+# Also exercise all 12 synthetic histories at 30/60/120 minutes and the CLI:
+BG_FORECAST_TEST_ZIP=/path/to/files.zip python -m unittest discover -s tests -v
+```
+
+The shared preprocessing is unchanged. The service uses a large dataset stride
+because it consumes the prepared array directly, avoiding a scan of historical
+windows it never uses. Evaluation still requires its normal dependencies when called.
 
 ---
 

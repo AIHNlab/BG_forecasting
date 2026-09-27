@@ -14,7 +14,7 @@ Developed and tested against the MELISSA sample CSVs in
 |---|---|
 | D1 | Short histories supported (less than the 8-day window). |
 | D2 | Forecast only — no backtest, no metrics on the request path. |
-| D3 | Keep the full sequence; do **not** drop the last `forecast_steps` from the input. |
+| D3 | Keep the latest observation; use the latest `feature_window - forecast_steps` history rows to match training. |
 | D4 | Discard no batch — every window fed returns a prediction. |
 | D5 | Existing training/evaluation behaviour preserved. All changes additive. |
 | D6 | Dataloader name: `DataloaderMelissa`. |
@@ -113,10 +113,11 @@ in memory. **There is no retention or cleanup policy**, and runs hold per-user g
 | [pipeline/config.py](pipeline/config.py) | per-request config, never written to disk |
 
 **Forecast path:** CSV → `DataloaderMelissa` → `DataPrepper` **unmodified** → slice
-`input_data[-2304:]` → `PeriodicityReshape` → `model(...)` → inverse-transform.
+`input_data[-2280:]` → `PeriodicityReshape` → `model(...)` → inverse-transform.
 
-**Why this shape:** calling `DataPrepper` unmodified and slicing its output gives byte-identical
-preprocessing while satisfying D3 — so no shared code changes and D5 needs no regression baseline.
+**Why this shape:** calling `DataPrepper` unmodified preserves preprocessing. The service uses
+`feature_window - forecast_steps` history rows, matching training (2280 for this bundle),
+but slices from the newest end to satisfy D3. No observations are removed from the end.
 Calling the model directly instead of `trainer.test` satisfies D4 with `test()` untouched.
 
 **Preventing a refit without touching shared code:** `ForecastOnlyScaler(StandardScaler)` overrides
@@ -126,8 +127,10 @@ is written; on the normal path `load_scaler` rebinds to the loaded scaler and th
 The parameter comparison that follows is a *consistency* check against swapped artifacts — matching
 means and scales would not, on its own, prove nothing was fitted.
 
-**Accepted costs:** `DataPrepper` builds a `SequenceDataset` the path discards (~36-162 ms), and
-re-reads both scalers from disk per request — the warm runtime holds the **model only**.
+**Accepted costs:** `DataPrepper` still builds a `SequenceDataset` the path discards, but the
+service sets its stride to the upload row count so at most one candidate is checked.
+This avoids the full historical-window scan without changing the prepared arrays.
+Both scalers are still read from disk per request — the warm runtime holds the **model only**.
 
 ### Running it
 
@@ -139,12 +142,13 @@ PYTHONPATH=/path/to/BG_forecasting python -m service --csv ... --user-id ...   #
 stdout is clean CSV; progress, warnings and event risk go to stderr. `--format json` emits the full
 payload. In Python, build `Forecaster()` once and reuse it.
 
-### Footprint on existing code — 15 lines
+### Footprint on existing code
 
 ```
  data/handler.py          | 1 +   # register DataloaderMelissa
  dataloaders/__init__.py  | 1 +   # register DataloaderMelissa
  pipeline/orchestrator.py | 13 +  # forecast dispatch branch
+ pipeline/__init__.py             # lazy evaluation exports; same public entry points
 ```
 
 `main(config, train=True, test=True, *, runtime=None)` — `runtime` keyword-only, service imported
@@ -177,16 +181,18 @@ Each of these was reproduced and confirmed against the MELISSA CSV and the bundl
 
 - Choose a web framework and add it to [requirements.txt](requirements.txt). Endpoints are a thin
   layer over `Forecaster.forecast(user_id, csv_path, horizon_minutes)`.
-- **No automated test suite.** The behaviour above was verified manually; there is nothing guarding
-  it against regressions.
+- Focused automated tests now cover input length/alignment, padding, stride equivalence and
+  pipeline import compatibility. Set `BG_FORECAST_TEST_ZIP` when running
+  `python -m unittest discover -s tests -v` to include all 36 synthetic forecasts and a CLI check.
+  The other manual checks above are not all covered by this suite.
 - Deferred: `GET /v1/forecasts/{run_id}/event-risk` (a read of a stored run — never a recompute;
   must carry `run_id`, `forecast_origin`, `model_version`).
 - **No retention or cleanup for saved runs**, which are now written by default. Runs accumulate
   indefinitely and contain per-user glucose data; decide on a policy before any real volume.
 - A read-only bundle directory remains useful deployment hardening, though the service no longer
   depends on it.
-- **Unmeasured:** history length 2304 vs 2280 (288 vs 285 tokens; differed by up to 6.46 mg/dL in
-  one synthetic comparison), and the centred-smoothing skew — requires offline runs with history
-  truncated at each origin. Interval widths remain **unattributed**: AI4Food weights, 24-row
-  history and the token-count change are confounded.
+- History length now matches training: 2280 rather than 2304 (285 rather than 288 feature
+  tokens). A synthetic comparison changed point predictions by up to 13.14 mg/dL; this does
+  not establish improved accuracy. The centred-smoothing skew still requires offline runs
+  with history truncated at each origin. Interval widths remain **unattributed**.
 - Swap in the MELISSA bundle when re-obtained — one `model_dir` change.

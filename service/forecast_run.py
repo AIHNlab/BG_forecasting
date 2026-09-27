@@ -113,11 +113,11 @@ def run_forecast(config, runtime=None):
 
     warnings = []
     observed = len(dataframe)
-    feature_window = hp_config['feature_window']
-    if observed < feature_window:
+    history_length = hp_config['feature_window'] - hp_config['forecast_steps']
+    if observed < history_length:
         warnings.append(
             f'History is {observed} samples; the model input was left-padded with '
-            f'{feature_window - observed} missing-value steps.')
+            f'{history_length - observed} missing-value steps.')
 
     run_id = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + '_' + uuid.uuid4().hex[:12]
     result = ForecastResult(
