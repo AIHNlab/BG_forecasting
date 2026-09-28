@@ -41,7 +41,7 @@ def init_experiment_directory(config):
     with open(experiment_path+os.sep+'model_config.json', 'w') as f:
         f.write(json.dumps(config, indent=4))
 
-def main(config, train=True, test=True):
+def main(config, train=True, test=True, *, runtime=None):
     """Run a full experiment: load data, optionally train, optionally evaluate.
 
     Supports both single-dataset and multi-dataset (merged) configurations.
@@ -51,7 +51,18 @@ def main(config, train=True, test=True):
         config: Experiment configuration dict with ``hp_config`` and ``run_config``.
         train: Ignored — controlled by ``config['run_config']['train']``.
         test: Ignored — controlled by ``config['run_config']['test']``.
+        runtime: Keyword-only. Optional warm runtime (model, device, bundle digests)
+            supplied by the forecast service so the model is not rebuilt per request.
+            Ignored unless ``run_config['mode'] == 'forecast'``.
     """
+    if config['run_config'].get('mode') == 'forecast':
+        # Imported inside the branch so training/evaluation callers never load the
+        # service package. Returns before init_experiment_directory, which would
+        # otherwise write model_config.json into the shared model directory.
+        from service.forecast_run import run_forecast
+
+        return run_forecast(config, runtime=runtime)
+
     init_experiment_directory(config)
     if len(config['run_config']['dataloaders']) == 1:
         data_handler = DataHandler(config['run_config']['dataloaders'][0], "", dataset_name=config['run_config']['dataset_names'][0])
