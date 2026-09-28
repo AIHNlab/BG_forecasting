@@ -87,11 +87,6 @@ class ForecastResult:
             },
             'event_risk': {
                 'horizon_minutes': EVENT_RISK_HORIZON_MIN,
-                'fixed': True,
-                'scale': 'uncalibrated_score',
-                'definition': ('3+ consecutive samples below the hypo threshold (or above the '
-                               'hyper threshold) within the next 60 min, else the mean fraction '
-                               'of samples beyond that threshold'),
                 'thresholds_mgdl': {'hypo': self.hypo_threshold, 'hyper': self.hyper_threshold},
                 'hypo': self.event_risk_hypo,
                 'hyper': self.event_risk_hyper,

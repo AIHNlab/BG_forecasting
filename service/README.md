@@ -260,7 +260,7 @@ Two caveats, both of which matter:
                  "ci_low_mgdl": 91.55, "ci_high_mgdl": 158.10,
                  "glycemic_zone": "in_range" } ]
   },
-  "event_risk": { "horizon_minutes": 60, "fixed": true, ... },
+  "event_risk": { "horizon_minutes": 60, "thresholds_mgdl": { ... }, "hypo": ..., "hyper": ... },
   "warnings": []                          // e.g. a short history was padded
 }
 ```
