@@ -5,8 +5,8 @@ iTransformerMasked checkpoint. Returns a per-step trajectory with uncertainty, p
 a separate hypo/hyper event risk.
 
 This package is **additive**: it calls the training/evaluation pipeline without
-changing it. The only edit to existing code is one early-return branch in
-`pipeline.orchestrator.main`. Design rationale lives in
+changing its calculations. Forecast dispatch returns early in `pipeline.orchestrator.main`;
+evaluation exports load lazily so forecasting does not require `cg_ega`. Design rationale lives in
 [API_IMPLEMENTATION_PLAN.md](API_IMPLEMENTATION_PLAN.md).
 
 ---
@@ -153,9 +153,10 @@ than silently degraded.
 and zero both count as missing — the pipeline converts exact zeros to missing
 values, so write blanks for gaps, never `0`.
 
-Histories shorter than 2304 samples (8 days) are left-padded with the model's
-missing-value token. This works, but accuracy at very short histories is not
-validated.
+The service uses the latest `feature_window - forecast_steps` samples (2280 for
+this bundle), matching training while retaining the newest observation. Shorter
+histories are left-padded with the model's missing-value token. Matching training
+length changes predictions; improved accuracy has not been established.
 
 ```csv
 user_id,timestamp,cbg,diagnosis_type,biological_sex,age,bmi,bolus,basal,carbInput,insulin_treatment

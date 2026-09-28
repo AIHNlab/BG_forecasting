@@ -3,10 +3,11 @@
 Preprocessing is delegated to ``DataPrepper`` **unmodified**, so smoothing,
 zero-to-missing conversion, scaling, sentinel fills and front-padding are exactly
 what training and evaluation use.  The only thing done here is choosing which
-window to feed: the final ``feature_window`` rows, ending at the forecast origin.
+window to feed: the final ``feature_window - forecast_steps`` rows, ending at the
+forecast origin, matching the history length supplied during training.
 
-Nothing is truncated from the end of the sequence, so the model receives the full
-history and predicts genuinely future steps.
+Nothing is truncated from the end of the sequence, so the model receives the
+latest observation and predicts genuinely future steps.
 """
 
 import numpy as np
@@ -82,7 +83,7 @@ def build_forecast_input(dataframe, metadata, user_id, hp_config, run_config, mo
 
     Returns:
         tuple: ``(prepper, window, origin)`` where ``window`` is the scaled
-        ``(feature_window, n_features)`` array ending at ``origin``.  The prepper
+        ``(feature_window - forecast_steps, n_features)`` array ending at ``origin``. The prepper
         is returned because its scaler performs the inverse transform.
 
     Note:
@@ -117,7 +118,9 @@ def build_forecast_input(dataframe, metadata, user_id, hp_config, run_config, mo
         patch_size=hp_config['patch_size'],
         fill_types=run_config['fill_types'],
         experiment_path=model_dir,
-        step=1,
+        # Only input_data is used below. Check at most one candidate instead of
+        # scanning every historical window for a dataset we never iterate over.
+        step=max(1, len(dataframe)),
         sequence_length=feature_window,
         history_of_days=hp_config['history_of_days'],
         # No augmentation at inference time.
@@ -139,7 +142,8 @@ def build_forecast_input(dataframe, metadata, user_id, hp_config, run_config, mo
     # input_data is front-padded by sequence_length, so it always has at least
     # feature_window rows even for a very short upload.
     prepared = prepper.make_features_and_targetpair().datasets[0].input_data
-    window = prepared[-feature_window:]
+    history_length = feature_window - hp_config['forecast_steps']
+    window = prepared[-history_length:]
 
     origin = dataframe[TIMESTAMP_COLUMN].iloc[-1]
     return prepper, window, origin

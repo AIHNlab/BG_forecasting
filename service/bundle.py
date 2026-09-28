@@ -97,10 +97,11 @@ def _check_config_shapes(hp_config, features):
         raise BundleError(
             f"hp_config.n_features={hp_config['n_features']} disagrees with "
             f'{len(features)} configured features.')
-    if hp_config['feature_window'] % hp_config['patch_size'] != 0:
+    history_length = hp_config['feature_window'] - hp_config['forecast_steps']
+    if history_length <= 0 or history_length % hp_config['patch_size'] != 0:
         raise BundleError(
-            f"feature_window={hp_config['feature_window']} is not a multiple of "
-            f"patch_size={hp_config['patch_size']}; PeriodicityReshape would raise.")
+            f'Forecast history length feature_window - forecast_steps={history_length} '
+            f"must be positive and a multiple of patch_size={hp_config['patch_size']}.")
 
 
 def load_config(model_dir):
